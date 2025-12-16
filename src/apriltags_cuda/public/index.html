@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>AprilTag Detection with Controls and Pose Data</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .slider {
+            width: 600px; /* Adjust this value to change the slider width */
+            height: 8px; /* Adjust this for track thickness */
+        }
+            /* Style the thumb (the movable part of the slider) */
+        .slider::-webkit-slider-thumb {
+            width: 20px; /* Adjust the thumb width */
+            height: 20px; /* Adjust the thumb height */
+            background-color: #4CAF50;
+            border-radius: 50%; /* Makes it circular */
+            cursor: pointer;
+        }
+        .slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background-color: #4CAF50;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .image-container {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        #apriltag-image {
+            max-width: 100%;
+            height: auto;
+            max-height: 400px;
+            object-fit: contain;
+        }
+
+        .controls-container {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .control {
+            margin-bottom: 15px;
+        }
+
+        #pose-data {
+            margin-top: 20px;
+        }
+
+        .tag-detection {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+        }
+
+        .tag-detection-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+        }
+
+        .tag-info {
+            flex: 0 0 auto;
+            width: 200px;
+            /* Adjust as needed */
+        }
+
+        .tag-info h3 {
+            margin-top: 0;
+            margin-bottom: 5px;
+        }
+
+        .rotation-matrix {
+            flex: 1;
+        }
+
+        .pose-matrix {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2px;
+            margin-bottom: 10px;
+            font-size: 0.8em;
+        }
+
+        .pose-matrix div {
+            background-color: #eee;
+            padding: 3px;
+            text-align: center;
+        }
+
+        .translation-vector {
+            display: inline-flex;
+            gap: 10px;
+            font-size: 0.9em;
+        }
+        .matrix-container {
+            margin-top: 20px;
+        }
+        .matrix {
+            display: grid;
+            grid-template-columns: repeat(3, 50px);
+            gap: 5px;
+        }
+        .matrix input {
+            width: 50px;
+            height: 30px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>AprilTag Detection with Controls and Pose Data</h1>
+    <input type="checkbox" id="developer_mode">Developer Mode</input>
+    
+    <div class="matrix-container">
+        <h2>Rotation Matrix</h2>
+        <div class="matrix">
+            <input type="number" id="m00" value="0">
+            <input type="number" id="m01" value="1">
+            <input type="number" id="m02" value="2">
+            <input type="number" id="m10" value="3">
+            <input type="number" id="m11" value="4">
+            <input type="number" id="m12" value="5">
+            <input type="number" id="m20" value="6">
+            <input type="number" id="m21" value="7">
+            <input type="number" id="m22" value="8">
+        </div>
+        <button id="send_matrix">Send Rotation Matrix</button>
+    </div>
+
+    <div class="container">
+        <h2>Offset Matrix</h2>
+        <input type="number" id="offset_x" value="0">
+        <input type="number" id="offset_y" value="0">
+        <input type="number" id="offset_z" value="0">
+
+        <button id="send_offset">Send Offset</button>
+    </div>
+
+    <div class="container">
+        <div class="image-container">
+            <img id="apriltag-image" alt="AprilTag Detection">
+        </div>
+        <div class="controls-container">
+            <div class="control">
+                <label>Exposure Mode:</label>
+                <input type="radio" id="auto-exposure" name="exposure-mode" value="0" checked>
+                <label for="auto-exposure">Auto</label>
+                <input type="radio" id="manual-exposure" name="exposure-mode" value="1">
+                <label for="manual-exposure">Manual</label>
+            </div>
+            <div class="control">
+                <label for="brightness">Brightness:</label>
+                <input type="range" id="brightness" min="-64" max="64" value="0" class="slider">
+            </div>
+            <div class="control">
+                <button id="incrementBrightnessUp"> +1 Brightness </button>
+                <button id="incrementBrightnessDown"> -1 Brightness </button>
+            </div>
+            <div class="control">
+                <label for="exposure">Exposure:</label>
+                <input type="range" id="exposure" min="1" max="5000" value="157" class="slider">
+            </div>
+            <div class="control">
+                <button id="incrementExposureUp"> +3 Exposure </button>
+                <button id="incrementExposureDown"> -3 Exposure </button>
+            </div>
+            <div class="control">
+                <input type="checkbox" id="rotate-image-vertically" name="rotate-image-vertically">
+                <label for="rotate-image-vertically">Rotate Image (CHECK BOTH BOXES) </label>
+            </div>
+            <div class="control">
+                <input type="checkbox" id="rotate-image-horizontally" name="rotate-image-horizontally">
+                <label for="rotate-image-horizontally">Rotate Image (CHECK BOTH BOXES) </label>
+            </div>
+
+        </div>
+    </div>
+    <h2>Pose Data:</h2>
+    <div id="pose-data"></div>
+
+    <script>
+
+        // Establish WebSocket connection
+        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+        socket.binaryType = 'arraybuffer';
+
+        socket.onopen = function () {
+            console.log('Connected to server');
+        };
+
+        socket.onmessage = function (event) {
+            const data = event.data;
+
+            if (data instanceof ArrayBuffer) {
+                const bytes = new Uint8Array(data);
+                const prefixBytes = bytes.slice(0, 5); // First 5 bytes for the prefix
+                const prefix = new TextDecoder().decode(prefixBytes);
+
+                if (prefix === "IMG::") {
+                    // Handle image data
+                    const imageData = bytes.slice(5); // Remaining bytes are image data
+                    const blob = new Blob([imageData], { type: 'image/jpeg' });
+                    const url = URL.createObjectURL(blob);
+                    document.getElementById('apriltag-image').src = url;
+
+                    // Revoke the object URL after the image has loaded to free memory
+                    imgElement.onload = function () {
+                        URL.revokeObjectURL(url);
+                    };
+                }
+                else if (prefix === "POSE:") {
+                    // Handle pose data
+                    const poseDataBytes = bytes.slice(5); // Remaining bytes are JSON data
+                    const poseDataString = new TextDecoder().decode(poseDataBytes);
+                    try {
+                        const poseData = JSON.parse(poseDataString);
+                        const poseDataElement = document.getElementById('pose-data');
+                        poseDataElement.innerHTML = formatPoseData(poseData);
+                    } catch (e) {
+                        console.error('Failed to parse pose data JSON:', e);
+                    }
+                }
+                else {
+                    console.warn('Unknown message prefix:', prefix);
+                }
+            }
+        };
+
+        socket.onerror = function (error) {
+            console.error('WebSocket error:', error);
+        };
+
+        socket.onclose = function () {
+            console.log('WebSocket connection closed');
+            // Optionally implement reconnection logic here
+        };
+
+        function sendControl(type, value) {
+            const message = JSON.stringify({ type: type, value: value });
+            socket.send(message);
+        }
+
+        document.getElementById('brightness').oninput = function () {
+            sendControl('brightness', parseInt(this.value));
+        };
+
+        document.getElementById('incrementBrightnessUp').onclick = function () {
+            const slider = document.getElementById('brightness');
+            slider.value = parseInt(slider.value) + 1;
+            sendControl('brightness', parseInt(slider.value));
+        };
+
+        document.getElementById('incrementBrightnessDown').onclick = function () {
+            const slider = document.getElementById('brightness');
+            slider.value = parseInt(slider.value) - 1;
+            sendControl('brightness', parseInt(slider.value));
+        };
+
+        document.getElementById('incrementExposureUp').onclick = function () {
+            const slider = document.getElementById('exposure');
+            slider.value = parseInt(slider.value) + 3;
+            sendControl('exposure', parseInt(slider.value));
+        };
+
+        document.getElementById('incrementExposureDown').onclick = function () {
+            const slider = document.getElementById('exposure');
+            slider.value = parseInt(slider.value) - 3;
+            sendControl('exposure', parseInt(slider.value));
+        };
+
+        document.getElementById('exposure').oninput = function () {
+            sendControl('exposure', parseInt(this.value));
+        };
+
+        document.querySelectorAll('input[name="exposure-mode"]').forEach((radio) => {
+            radio.onchange = function () {
+                sendControl('exposure-mode', parseInt(this.value));
+                document.getElementById('exposure').disabled = (this.value === '0');
+                document.getElementById('brightness').disabled = (this.value === '0');
+            };
+        });
+
+        document.getElementById('rotate-image-vertically').onchange = function() {
+            sendControl('flipVertical', this.checked);
+        };
+        document.getElementById('rotate-image-horizontally').onchange = function() {
+            sendControl('flipHorizontal', this.checked);
+        };
+
+        document.getElementById('developer_mode').onchange = function () {
+            sendControl('developer_mode', this.checked);
+        };
+
+        document.getElementById('send_matrix').onclick = function () {
+            const matrix = [
+                document.getElementById('m00').value,
+                document.getElementById('m01').value,
+                document.getElementById('m02').value,
+                document.getElementById('m10').value,
+                document.getElementById('m11').value,
+                document.getElementById('m12').value,
+                document.getElementById('m20').value,
+                document.getElementById('m21').value,
+                document.getElementById('m22').value
+            ].map(Number);
+            sendControl('rotation_matrix', matrix);
+        };
+
+        document.getElementById('send_offset').onclick = function () {
+            const offset = [
+                document.getElementById('offset_x').value,
+                document.getElementById('offset_y').value,
+                document.getElementById('offset_z').value
+            ].map(Number);
+            sendControl('offset_vector', offset);
+        };
+
+        // Initial state
+        document.getElementById('exposure').disabled = true;
+        document.getElementById('brightness').disabled = true;
+
+        function formatPoseData(data) {
+
+            if (data.EMPTY == "true"){
+                let toReturn = '';
+                toReturn += `
+                    <div class="tag-detection">
+                        <div class="tag-detection-header">
+                            <div class="tag-info">
+                                <h3>No Tag Found</h3>
+                                <p>No Tag Found</p>
+                                <p>No Tag Found</p>
+                            </div>
+                            <div class="rotation-matrix">
+                                <h4>Rotation Matrix:</h4>
+                                <div class="pose-matrix">
+                                    No Tag Found
+                                </div>
+                            </div>
+                        </div>
+                        <h4>Translation Vector:</h4>
+                        <div class="translation-vector">
+                            No Tag Found
+                        </div>
+                    </div>
+                `;
+                return toReturn;
+            }
+            let html = '';
+            data.detections.forEach(detection => {
+                html += `
+                    <div class="tag-detection">
+                        <div class="tag-detection-header">
+                            <div class="tag-info">
+                                <h3>Tag ID: ${detection.id}</h3>
+                                <p>Hamming: ${detection.hamming}</p>
+                                <p>Pose Error: ${detection.pose_error.toFixed(4)}</p>
+                            </div>
+                            <div class="rotation-matrix">
+                                <h4>Rotation Matrix:</h4>
+                                <div class="pose-matrix">
+                                    ${detection.rotation.flat().map(val => `<div>${val.toFixed(4)}</div>`).join('')}
+                                </div>
+                            </div>
+                        </div>
+                        <h4>Translation Vector:</h4>
+                        <div class="translation-vector">
+                            ${detection.translation.map(val => `<span>${val.toFixed(4)}</span>`).join(' ')}
+                        </div>
+                    </div>
+                `;
+            });
+            return html;
+        }
+
+        // Initial state
+        document.getElementById('exposure').disabled = true;
+        document.getElementById('brightness').disabled = true;
+
+    </script>
+</body>
+
+</html>

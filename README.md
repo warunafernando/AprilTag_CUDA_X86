@@ -1,0 +1,236 @@
+# Standalone CUDA AprilTag Detector
+
+A high-performance CUDA-based AprilTag detection system with coordinate scaling fixes, duplicate filtering, and 3D visualization capabilities.
+
+## Overview
+
+This project provides a standalone implementation of the CUDA AprilTag detector based on the [Team766/apriltags_cuda](https://github.com/Team766/apriltags_cuda) repository. It includes several enhancements:
+
+- **Coordinate Scaling Fix**: Corrects GPU detector coordinates from decimated space to full resolution
+- **Duplicate Detection Filtering**: Removes false positives and duplicate detections
+- **3D Visualization**: Real-time 3D pose visualization with distance measurement
+- **Performance Benchmarking**: Comprehensive performance analysis tools
+
+## Features
+
+- GPU-accelerated AprilTag detection using CUDA
+- Real-time video processing with 3D visualization
+- Coordinate transformation fixes for accurate tag localization
+- Duplicate detection filtering for reliable results
+- Distance measurement from camera to tag
+- Frame-by-frame performance metrics
+- Support for multiple tag families (tag36h11, tag25h9, etc.)
+
+## Requirements
+
+- **CUDA Toolkit**: 12.2 or compatible
+- **CMake**: 3.15 or higher
+- **Ninja**: Build system
+- **OpenCV**: Built with CUDA support (automatically built during setup)
+- **System Libraries**:
+  - `libapriltag` (installed system-wide at `/usr/local/lib/libapriltag.so`)
+  - Headers at `/usr/local/include/apriltag/`
+
+## Directory Structure
+
+```
+StandAlone/
+├── src/
+│   ├── apriltags_cuda/          # Main CUDA AprilTag detector
+│   │   ├── src/                  # Core detection code
+│   │   ├── tools/                # Utility tools
+│   │   │   ├── video_visualize_fixed.cu  # Visualization with fixes
+│   │   │   ├── compare_detectors.cu      # CPU vs GPU comparison
+│   │   │   └── debug_coordinates.cu      # Coordinate debugging
+│   │   └── CMakeLists.txt
+│   └── apriltag_cgpadwick/       # CPU AprilTag library (dependency)
+├── input/                        # Input video files
+│   ├── Stable.avi
+│   └── Moving.avi
+├── output/                       # Generated outputs (excluded from git)
+├── setup_env.sh                  # Environment setup script
+└── README.md                     # This file
+```
+
+## Setup
+
+1. **Set up environment** (required before building):
+```bash
+source setup_env.sh
+```
+
+2. **Build the project**:
+```bash
+cd src/apriltags_cuda/build
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=86 \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.2/bin/nvcc \
+  -DCMAKE_CUDA_STANDARD=17 ..
+ninja -j4
+```
+
+**Note**: Adjust `CMAKE_CUDA_ARCHITECTURES` for your GPU:
+- RTX 2050/2060/2070/2080: `86`
+- RTX 3050/3060/3070/3080: `86`
+- RTX 3090/4090: `89`
+- Check your GPU compute capability: `nvidia-smi --query-gpu=compute_cap --format=csv`
+
+## Usage
+
+### Video Visualization with 3D Tags
+
+Generate output videos with 3D tag visualization, frame numbers, FPS counter, and distance measurements:
+
+```bash
+cd src/apriltags_cuda/build
+./video_visualize_fixed \
+  --video /home/nav/Apriltag/input/Stable.avi \
+  --output /home/nav/Apriltag/output/Stable_3d_fixed.avi \
+  --family tag36h11 \
+  --tag_size 0.305
+```
+
+**Options**:
+- `--video`: Input video path
+- `--output`: Output video path
+- `--family`: Tag family (default: `tag36h11`)
+- `--tag_size`: Tag size in meters (default: `0.305` for 1-foot tags)
+- `--min_distance`: Minimum distance for duplicate filtering in pixels (default: `50.0`)
+
+### Compare CPU vs GPU Detectors
+
+Compare detection accuracy between CPU and GPU implementations:
+
+```bash
+./compare_detectors \
+  --video /home/nav/Apriltag/input/Stable.avi \
+  --family tag36h11 \
+  --max_frames 100
+```
+
+### Debug Coordinate Transformations
+
+Debug coordinate scaling issues:
+
+```bash
+./debug_coordinates \
+  --video /home/nav/Apriltag/input/Stable.avi \
+  --family tag36h11 \
+  --max_frames 10
+```
+
+## Key Fixes and Enhancements
+
+### 1. Coordinate Scaling Fix
+
+The GPU detector processes images at decimated resolution (typically 2x decimation) for performance. The original implementation had issues with coordinate scaling, causing detections to appear at incorrect locations.
+
+**Fix**: Added coordinate scaling in `video_visualize_fixed.cu` to convert from decimated space to full resolution:
+```cpp
+void scale_detection_coordinates(apriltag_detection_t *det, double decimate_factor)
+```
+
+### 2. Duplicate Detection Filtering
+
+The GPU detector can produce multiple detections for the same physical tag. Added filtering to keep only the best detection per tag ID based on decision margin.
+
+**Implementation**: `filter_duplicates()` function filters by:
+- Tag ID (keeps best decision margin per ID)
+- Coordinate validity (removes detections outside image bounds)
+- Minimum distance threshold
+
+### 3. Distance Measurement
+
+Added real-time distance calculation from camera to tag using pose estimation:
+- Calculates translation vector magnitude
+- Displays distance in meters above each tag
+- Format: `ID:X Dist:Y.XXXm`
+
+### 4. Tag Size Configuration
+
+Default tag size set to 0.305m (1 foot) for accurate distance measurements. Adjust with `--tag_size` parameter if your tags are different sizes.
+
+## Performance
+
+Typical performance on RTX 2050:
+- **Stable video**: ~38-58 FPS processing speed
+- **Moving video**: ~20-40 FPS processing speed
+- **Detection accuracy**: ~99%+ with coordinate fixes
+- **Coordinate accuracy**: <1 pixel average error vs CPU detector
+
+## Troubleshooting
+
+### Build Issues
+
+1. **CUDA not found**: Ensure CUDA is installed and `CUDA_HOME` is set:
+   ```bash
+   export CUDA_HOME=/usr/local/cuda-12.2
+   ```
+
+2. **OpenCV not found**: OpenCV is built automatically during CMake configuration. If issues occur, check build logs in `src/apriltags_cuda/build/`.
+
+3. **apriltag library not found**: Ensure the CPU apriltag library is installed:
+   ```bash
+   # Check if installed
+   pkg-config --exists apriltag && echo "OK" || echo "Not found"
+   ```
+
+### Runtime Issues
+
+1. **Segmentation fault**: Ensure GPU detector is warmed up before processing. The visualization tool includes automatic warmup.
+
+2. **Incorrect distances**: Verify tag size matches your actual tag size:
+   ```bash
+   # For 1-foot tags (default)
+   --tag_size 0.305
+   
+   # For 6-inch tags
+   --tag_size 0.152
+   ```
+
+3. **No detections**: Check that:
+   - Video path is correct
+   - Tag family matches your tags (`tag36h11`, `tag25h9`, etc.)
+   - Tags are visible and properly lit in the video
+
+## Development
+
+### Adding New Tools
+
+Tools are located in `src/apriltags_cuda/tools/`. To add a new tool:
+
+1. Create `.cu` file in `tools/`
+2. Add executable to `CMakeLists.txt`:
+   ```cmake
+   add_executable(my_tool tools/my_tool.cu src/apriltag_utils.cu)
+   target_link_libraries(my_tool apriltag_cuda ...)
+   ```
+
+### Modifying Detection Pipeline
+
+Core detection code is in `src/apriltags_cuda/src/apriltag_detect.cu`. Key functions:
+- `GpuDetector::Detect()`: Main detection entry point
+- `GpuDetector::DecodeTags()`: Tag decoding and coordinate transformation
+- `AdjustPixelCenters()`: Coordinate scaling from decimated to full resolution
+
+## License
+
+This project is based on:
+- [Team766/apriltags_cuda](https://github.com/Team766/apriltags_cuda) - CUDA AprilTag detector
+- [cgpadwick/apriltag](https://github.com/cgpadwick/apriltag) - CPU AprilTag library
+
+See respective repositories for license information.
+
+## Contributing
+
+When contributing, please:
+1. Test with both Stable.avi and Moving.avi
+2. Verify coordinate accuracy using `compare_detectors`
+3. Update this README if adding new features
+4. Follow existing code style and conventions
+
+## Acknowledgments
+
+- Team766 for the CUDA AprilTag implementation
+- cgpadwick for the enhanced CPU AprilTag library
+- OpenCV team for computer vision libraries

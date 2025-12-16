@@ -1,0 +1,15 @@
+[Unit]
+Description=AprilTags Pipeline
+After=network-online.target network.target
+After=systemd-udevd-trigger.service systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/AprilTags/AprilTagsManager.sh start
+RemainAfterExit=true
+ExecStop=/opt/AprilTags/AprilTagsManager.sh stop
+StandardOutput=journal
+#Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,77 @@
+# Build artifacts
+build/
+src/apriltags_cuda/build/
+src/apriltag_cgpadwick/build/
+
+# Output files
+output/*.avi
+output/*.csv
+output/*.txt
+output/*.log
+output/*.png
+output/*.jpg
+
+# CMake
+**/CMakeCache.txt
+**/CMakeFiles/
+**/cmake_install.cmake
+**/Makefile
+**/*.ninja
+**/.ninja_deps
+**/.ninja_log
+**/install_manifest.txt
+
+# Compiled binaries and libraries
+**/*.o
+**/*.so
+**/*.so.*
+**/*.a
+**/video_bench
+**/video_visualize
+**/video_visualize_fixed
+**/video_visualize_cpu
+**/compare_detectors
+**/debug_coordinates
+**/extract_test_frames
+**/test_specific_frames
+**/debug_coordinate_pipeline
+**/opencv_cuda_demo
+**/apriltag_demo
+**/opencv_demo
+check_detections
+check_detections.cpp
+
+# Build logs
+**/*.log
+**/build_*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*~
+
+# External project builds (downloaded during build)
+src/apriltags_cuda/build/cccl/
+src/apriltags_cuda/build/json/
+src/apriltags_cuda/build/seasocks/
+src/apriltags_cuda/build/OpenCV/
+src/apriltags_cuda/build/*-install/

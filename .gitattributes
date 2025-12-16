@@ -1,0 +1,19 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Source code files
+*.cu text
+*.cpp text
+*.h text
+*.hpp text
+*.c text
+*.cmake text
+*.txt text
+*.md text
+*.sh text
+
+# Binary files
+*.avi binary
+*.so binary
+*.a binary
+*.o binary
