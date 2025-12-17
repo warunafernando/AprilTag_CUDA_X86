@@ -93,6 +93,14 @@ public:
   const zarray_t *Detections() const { return detections_; }
 
   void ReinitializeDetections();
+  
+  // Get timing statistics (returns duration in milliseconds)
+  double GetCudaOperationsDurationMs() const { 
+    return cuda_operations_duration_.count() / 1000000.0; 
+  }
+  double GetCpuDecodeDurationMs() const { 
+    return cpu_decode_duration_.count() / 1000000.0; 
+  }
 
   // Debug methods to expose internal state for testing.
   void CopyGrayTo(uint8_t *output) const {
@@ -342,6 +350,10 @@ private:
 
   // Cumulative duration of april tag detection.
   std::chrono::nanoseconds execution_duration_{0};
+  // Cumulative duration of CUDA operations (excluding CPU decode).
+  std::chrono::nanoseconds cuda_operations_duration_{0};
+  // Cumulative duration of CPU decode operations.
+  std::chrono::nanoseconds cpu_decode_duration_{0};
   // Number of detections.
   size_t execution_count_ = 0;
   // True if this is the first detection.

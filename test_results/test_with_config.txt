@@ -1,0 +1,90 @@
+Configuration loaded from: config.txt
+Data collection: ENABLED
+Using video FPS from metadata: 211.00
+Detector configuration:
+  Family: tag36h11
+  Quad decimate: 2.00
+  Quad sigma: 0.00
+  Threads: 1
+  Refine edges: true
+Filtering parameters:
+  min_cluster_pixels: 6
+  max_nmaxima: 10 (FIXED - compiled into CUDA kernel)
+  max_line_fit_mse: 8.00
+  critical_angle: 7.00°
+  min_white_black_diff: 6
+Processing video: input/Moving.avi
+Displaying on screen (no output file)
+Resolution: 1280x1024 @ 211.00 FPS
+Min distance for duplicate filtering: 50.00 pixels
+Press 'q' or ESC to quit
+
+Completed processing 1916 frames in 24.55 seconds
+Average processing FPS: 78.06
+Total detections before filtering: 7412
+Total detections after filtering: 1888
+Average per frame: 3 -> 0
+
+Frame detection statistics:
+BEFORE filtering:
+  Frames with tags detected: 1892 (98.7%)
+  Frames without tags: 24 (1.3%)
+AFTER filtering:
+  Frames with tags detected: 1888 (98.5%)
+  Frames without tags: 28 (1.5%)
+
+Frames with detections before filtering but none after: 4
+Frame numbers: 865, 1191, 1592, 1906
+Average detections per lost frame: 1.50
+Total detections filtered from these frames: 6
+Frame numbers saved to: lost_frames_list.txt
+
+========== Detailed Timing Statistics ==========
+Frame Read:
+  Average: 0.622 ms
+  Min:     0.415 ms
+  Max:     1.480 ms
+  Total:   1190.827 ms (1.191 s)
+Color Conversion:
+  Average: 0.199 ms
+  Min:     0.134 ms
+  Max:     0.987 ms
+  Total:   380.815 ms (0.381 s)
+GPU Detection (Total):
+  Average: 2.251 ms
+  Min:     1.421 ms
+  Max:     3.712 ms
+  Total:   4312.912 ms (4.313 s)
+  └─ CUDA Operations (GPU):
+  Average: 1.639 ms
+  Min:     1.294 ms
+  Max:     2.687 ms
+  Total:   3139.494 ms (3.139 s)
+  └─ CPU Decode (Tag ID):
+  Average: 0.574 ms
+  Min:     0.095 ms
+  Max:     1.491 ms
+  Total:   1098.722 ms (1.099 s)
+Coordinate Scaling:
+  Average: 0.001 ms
+  Min:     0.000 ms
+  Max:     0.003 ms
+  Total:   1.334 ms (0.001 s)
+Filter Duplicates:
+  Average: 0.002 ms
+  Min:     0.000 ms
+  Max:     0.073 ms
+  Total:   4.196 ms (0.004 s)
+Draw 3D Axes: N/A (no measurements)
+Draw Text: N/A (no measurements)
+Display (imshow):
+  Average: 0.462 ms
+  Min:     0.307 ms
+  Max:     1.310 ms
+  Total:   884.430 ms (0.884 s)
+
+Total Pipeline Time (per frame):
+  Average: 3.537 ms
+  FPS:     282.752
+============================================
+

@@ -1119,7 +1119,24 @@ void GpuDetector::Detect(const uint8_t *image) {
   UpdateFitQuads();
   AdjustPixelCenters();
 
+  // Record CUDA event before CPU decode operations
+  CudaEvent before_cpu_decode;
+  before_cpu_decode.Record(&stream_);
+  cudaStreamSynchronize(stream_.get()); // Ensure all CUDA operations complete before CPU decode
+  
+  // Time CPU decode operations separately
+  auto cpu_decode_start = std::chrono::steady_clock::now();
   DecodeTags();
+  auto cpu_decode_end = std::chrono::steady_clock::now();
+  cpu_decode_duration_ += std::chrono::duration_cast<std::chrono::nanoseconds>(
+      cpu_decode_end - cpu_decode_start);
+  
+  // Calculate CUDA-only duration (from start_ to before_cpu_decode)
+  if (!first_) {
+    before_cpu_decode.Synchronize();
+    auto cuda_time_ns = before_cpu_decode.ElapsedTime(start_);
+    cuda_operations_duration_ += cuda_time_ns;
+  }
 
   // const aos::monotonic_clock::time_point end_time =
   // aos::monotonic_clock::now();

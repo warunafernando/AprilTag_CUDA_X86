@@ -1,0 +1,37 @@
+{
+  "detector": {
+    "family": "tag36h11",
+    "quad_decimate": 2.0,
+    "quad_sigma": 0.0,
+    "nthreads": 1,
+    "refine_edges": true,
+    "debug": false
+  },
+  "filtering": {
+    "min_cluster_pixels": 6,
+    "max_line_fit_mse": 8.0,
+    "critical_angle_degrees": 7.0,
+    "min_white_black_diff": 6,
+    "min_distance_for_duplicates": 50.0
+  },
+  "camera": {
+    "fx": 905.495617,
+    "fy": 609.916016,
+    "cx": 907.909470,
+    "cy": 352.682645
+  },
+  "distortion": {
+    "k1": 0.059238,
+    "k2": -0.075154,
+    "p1": -0.003801,
+    "p2": 0.001113,
+    "k3": 0.0
+  },
+  "tag_size_meters": 0.305,
+  "data_collection": {
+    "enabled": false,
+    "save_lost_frames": true,
+    "lost_frames_output": "lost_frames_list.txt"
+  }
+}
+

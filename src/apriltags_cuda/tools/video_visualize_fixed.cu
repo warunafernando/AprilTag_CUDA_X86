@@ -13,6 +13,7 @@
 #include "apriltag_utils.h"
 #include "opencv2/opencv.hpp"
 #include "opencv2/calib3d.hpp"
+#include "config_parser.h"  // For reading config.txt
 
 extern "C" {
 #include "apriltag.h"
@@ -230,23 +231,22 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Load configuration from config.txt
+  ConfigParser config("config.txt");
+
+  // Use OpenCV VideoCapture and ask backend for grayscale frames
   VideoCapture cap(video_path, CAP_ANY);
   if (!cap.isOpened()) {
     cerr << "Failed to open video: " << video_path << endl;
     return 1;
   }
+
+  // CRITICAL: Don't convert to RGB - read grayscale directly for better performance
   cap.set(CAP_PROP_CONVERT_RGB, false);
 
-  Mat frame;
-  if (!cap.read(frame)) {
-    cerr << "Could not read first frame\n";
-    return 1;
-  }
-  CV_Assert(frame.type() == CV_8UC1);
-  int width = frame.cols;
-  int height = frame.rows;
-  
-  // Get FPS from video metadata
+  // Get video properties
+  int width = static_cast<int>(cap.get(CAP_PROP_FRAME_WIDTH));
+  int height = static_cast<int>(cap.get(CAP_PROP_FRAME_HEIGHT));
   double fps = cap.get(CAP_PROP_FPS);
   if (fps <= 0) {
     fps = 30.0; // Default if FPS not available
@@ -254,6 +254,22 @@ int main(int argc, char **argv) {
   } else {
     cout << "Using video FPS from metadata: " << fixed << setprecision(2) << fps << "\n";
   }
+
+  // Read first frame to verify (backend should give us grayscale)
+  Mat frame;
+  if (!cap.read(frame)) {
+    cerr << "Could not read first frame\n";
+    return 1;
+  }
+  
+  if (frame.empty()) {
+    cerr << "First frame is empty\n";
+    return 1;
+  }
+  
+  CV_Assert(frame.type() == CV_8UC1);  // Grayscale
+  cout << "First frame size: " << frame.cols << "x" << frame.rows 
+       << ", type: " << frame.type() << " (grayscale)" << endl;
 
   // Setup detector
   apriltag_family_t *tf = nullptr;
@@ -273,6 +289,7 @@ int main(int argc, char **argv) {
   frc971::apriltag::GpuDetector detector(width, height, td, cam, dist);
 
   // Create output video writer
+  // Convert grayscale to BGR for visualization
   Mat color_frame;
   cvtColor(frame, color_frame, COLOR_GRAY2BGR);
   VideoWriter writer(output_path, VideoWriter::fourcc('X', 'V', 'I', 'D'), 
@@ -293,12 +310,12 @@ int main(int argc, char **argv) {
   cout << "Resolution: " << width << "x" << height << " @ " << fps << " FPS\n";
   cout << "Min distance for duplicate filtering: " << min_distance << " pixels\n";
 
-  do {
-    CV_Assert(frame.type() == CV_8UC1);
-    
-    // Convert to color for visualization
-    cvtColor(frame, color_frame, COLOR_GRAY2BGR);
-    
+  // Process first frame that was already read
+  {
+    CV_Assert(frame.type() == CV_8UC1);  // Grayscale
+    CV_Assert(frame.cols == width && frame.rows == height);
+
+    // Detector path that was fastest originally: pass grayscale directly.
     auto f_start = chrono::steady_clock::now();
     detector.Detect(frame.data);
     auto f_end = chrono::steady_clock::now();
@@ -339,6 +356,83 @@ int main(int argc, char **argv) {
     // Filter duplicates (also filters out invalid coordinates)
     vector<apriltag_detection_t*> filtered = filter_duplicates(detections, width, height, min_distance);
     total_detections_after += filtered.size();
+    
+    // Convert grayscale to color for visualization
+    cvtColor(frame, color_frame, COLOR_GRAY2BGR);
+    
+    // Draw 3D visualization for each filtered detection
+    for (auto *det : filtered) {
+      draw_3d_axes(color_frame, det, cam, dist, tag_size);
+    }
+
+    // Draw frame number and FPS counter (top left)
+    stringstream info_text;
+    info_text << "Frame: " << frame_num << " | FPS: " << fixed << setprecision(1) << current_fps;
+    putText(color_frame, info_text.str(), Point(10, 30),
+            FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
+    
+    // Draw detection count (top right) - show both before and after filtering
+    stringstream det_text;
+    det_text << "Tags: " << filtered.size() << " (from " << zarray_size(detections) << ")";
+    Size det_size = getTextSize(det_text.str(), FONT_HERSHEY_SIMPLEX, 1.0, 2, nullptr);
+    putText(color_frame, det_text.str(), Point(width - det_size.width - 10, 30),
+            FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
+
+    // Write frame
+    writer.write(color_frame);
+
+    frame_num++;
+  }
+
+  // Continue with remaining frames
+  while (cap.read(frame)) {
+    CV_Assert(frame.type() == CV_8UC1);  // Grayscale
+    CV_Assert(frame.cols == width && frame.rows == height);
+
+    // Fastest path: pass grayscale directly to detector.
+    auto f_start = chrono::steady_clock::now();
+    detector.Detect(frame.data);
+    auto f_end = chrono::steady_clock::now();
+    double frame_ms = chrono::duration<double, milli>(f_end - f_start).count();
+    frame_times.push_back(frame_ms);
+    
+    // Calculate current FPS (rolling average)
+    double current_fps = 0.0;
+    if (frame_times.size() >= 30) {
+      double avg_ms = 0.0;
+      for (size_t i = frame_times.size() - 30; i < frame_times.size(); i++) {
+        avg_ms += frame_times[i];
+      }
+      avg_ms /= 30.0;
+      current_fps = 1000.0 / avg_ms;
+    } else if (frame_times.size() > 1) {
+      double avg_ms = 0.0;
+      for (double t : frame_times) avg_ms += t;
+      avg_ms /= frame_times.size();
+      current_fps = 1000.0 / avg_ms;
+    }
+
+    // Get detections
+    const zarray_t *detections = detector.Detections();
+    total_detections_before += zarray_size(detections);
+    
+    // IMPORTANT: Scale GPU detector coordinates from decimated to full resolution
+    // The GPU detector returns coordinates in decimated space (quad_decimate = 2.0)
+    const double gpu_decimate = td->quad_decimate;
+    if (gpu_decimate > 1.0) {
+      for (int i = 0; i < zarray_size(detections); i++) {
+        apriltag_detection_t *det;
+        zarray_get(const_cast<zarray_t *>(detections), i, &det);
+        scale_detection_coordinates(det, gpu_decimate);
+      }
+    }
+    
+    // Filter duplicates (also filters out invalid coordinates)
+    vector<apriltag_detection_t*> filtered = filter_duplicates(detections, width, height, min_distance);
+    total_detections_after += filtered.size();
+    
+    // Convert grayscale to color for visualization
+    cvtColor(frame, color_frame, COLOR_GRAY2BGR);
     
     // Draw 3D visualization for each filtered detection
     for (auto *det : filtered) {

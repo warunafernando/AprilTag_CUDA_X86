@@ -1,0 +1,6 @@
+# Frames that had detections before filtering but none after
+# Format: frame_number detection_count
+865 2
+1191 1
+1592 1
+1906 2

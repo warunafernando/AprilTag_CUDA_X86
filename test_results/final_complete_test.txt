@@ -1,0 +1,76 @@
+Using video FPS from metadata: 211.00
+Tuned filtering parameters for early false positive rejection:
+  min_cluster_pixels: 8 (default: 5)
+  max_nmaxima: 10 (FIXED - compiled into CUDA kernel)
+  max_line_fit_mse: 6.00 (default: 10.0)
+  critical_angle: 7° (default: 10°)
+  min_white_black_diff: 8 (default: 5)
+Processing video: input/Moving.avi
+Displaying on screen (no output file)
+Resolution: 1280x1024 @ 211.00 FPS
+Min distance for duplicate filtering: 50.00 pixels
+Press 'q' or ESC to quit
+
+Completed processing 1916 frames in 102.49 seconds
+Average processing FPS: 18.69
+Total detections before filtering: 7387
+Total detections after filtering: 1888
+Average per frame: 3 -> 0
+
+Frame detection statistics:
+BEFORE filtering:
+  Frames with tags detected: 1907 (99.5%)
+  Frames without tags: 9 (0.5%)
+AFTER filtering:
+  Frames with tags detected: 1888 (98.5%)
+  Frames without tags: 28 (1.5%)
+
+========== Detailed Timing Statistics ==========
+Frame Read:
+  Average: 1.095 ms
+  Min:     0.456 ms
+  Max:     12.685 ms
+  Total:   2096.909 ms (2.097 s)
+Color Conversion:
+  Average: 0.517 ms
+  Min:     0.137 ms
+  Max:     8.651 ms
+  Total:   990.207 ms (0.990 s)
+GPU Detection (Total):
+  Average: 9.655 ms
+  Min:     1.876 ms
+  Max:     223.219 ms
+  Total:   18498.929 ms (18.499 s)
+  └─ CUDA Operations (GPU):
+  Average: 4.823 ms
+  Min:     1.505 ms
+  Max:     97.892 ms
+  Total:   9172.448 ms (9.172 s)
+  └─ CPU Decode (Tag ID):
+  Average: 3.683 ms
+  Min:     0.201 ms
+  Max:     27.084 ms
+  Total:   7053.415 ms (7.053 s)
+Coordinate Scaling:
+  Average: 0.001 ms
+  Min:     0.000 ms
+  Max:     0.032 ms
+  Total:   2.536 ms (0.003 s)
+Filter Duplicates:
+  Average: 0.006 ms
+  Min:     0.000 ms
+  Max:     0.110 ms
+  Total:   10.838 ms (0.011 s)
+Draw 3D Axes: N/A (no measurements)
+Draw Text: N/A (no measurements)
+Display (imshow):
+  Average: 1.111 ms
+  Min:     0.292 ms
+  Max:     12.809 ms
+  Total:   2120.326 ms (2.120 s)
+
+Total Pipeline Time (per frame):
+  Average: 12.385 ms
+  FPS:     80.746
+============================================
+

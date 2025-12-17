@@ -20,6 +20,7 @@ find_package(ZLIB REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(APRILTAG REQUIRED apriltag)
+pkg_check_modules(LIBAV REQUIRED libavformat libavcodec libavutil libswscale)
 
 #set(GLOG_INSTALL_DIR ${CMAKE_BINARY_DIR}/glog-install)
 #set(GTEST_INSTALL_DIR ${CMAKE_BINARY_DIR}/gtest-install)
@@ -175,6 +176,12 @@ set(CUDA_LIB_SOURCES
     src/apriltag_utils.cu
     src/video_processor.cu)
 
+# Add FFmpeg video reader library
+add_library(ffmpeg_video_reader STATIC tools/ffmpeg_video_reader.cpp)
+target_include_directories(ffmpeg_video_reader PUBLIC ${CMAKE_SOURCE_DIR}/tools)
+target_link_libraries(ffmpeg_video_reader ${LIBAV_LIBRARIES})
+target_include_directories(ffmpeg_video_reader PUBLIC ${LIBAV_INCLUDE_DIRS})
+
 # Add a library with the above source files
 add_library(apriltag_cuda ${CUDA_LIB_SOURCES})
 
@@ -280,15 +287,18 @@ target_include_directories(video_visualize PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/
 add_executable(video_visualize_fixed tools/video_visualize_fixed.cu)
 target_link_libraries(video_visualize_fixed
     apriltag_cuda
+    ffmpeg_video_reader
     ${APRILTAG_LIBRARIES}
+    ${LIBAV_LIBRARIES}
     ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_calib3d.so
-    glog::glog)
-target_include_directories(video_visualize_fixed PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+    glog::glog
+    Threads::Threads)
+target_include_directories(video_visualize_fixed PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tools ${LIBAV_INCLUDE_DIRS} /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
 
 add_executable(video_visualize_cpu tools/video_visualize_cpu.cu src/apriltag_utils.cu)
 target_link_libraries(video_visualize_cpu

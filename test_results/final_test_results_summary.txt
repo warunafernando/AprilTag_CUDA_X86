@@ -1,0 +1,39 @@
+======================================================================
+PERFORMANCE SUMMARY
+======================================================================
+
+Total Frames Processed: 1916
+Total Time: 88.27 seconds
+Processing FPS: 21.71
+
+Pipeline Performance:
+  Average per frame: 10.665 ms
+  Theoretical FPS: 93.77
+
+Detection Statistics:
+  Before filtering: 7412 (3.87/frame)
+  After filtering: 1888 (0.99/frame)
+  Filtered: 5524 (74.5%)
+
+Frame Detection Coverage:
+  Frames with tags detected: 1888 (98.5%)
+  Frames without tags: 28 (1.5%)
+  Avg detections per detected frame: 1.00
+
+Component Timing Breakdown (ms/frame):
+  GPU Detection (Total):        8.497 ms ( 79.7%)
+    ├─ CUDA Operations:         4.032 ms ( 37.8%)
+    └─ CPU Decode:              3.360 ms ( 31.5%)
+
+Other Components:
+  Frame Read                   0.867 ms (  8.1%)
+  Color Conversion             0.335 ms (  3.1%)
+  Coordinate Scaling           0.001 ms (  0.0%)
+  Filter Duplicates            0.006 ms (  0.1%)
+
+Filtering Parameters:
+  min_cluster_pixels: 8
+  max_line_fit_mse: 6.0
+  min_white_black_diff: 8
+
+======================================================================

@@ -1,0 +1,5 @@
+Configuration loaded from: config.txt
+Data collection: ENABLED
+WARNING: Logging before InitGoogleLogging() is written to STDERR
+F1216 21:35:02.702715 34147 apriltag_gpu.cu:173] Check failed: tag_detector_->quad_decimate == 2 (2.5 vs. 2) 
+*** Check failure stack trace: ***

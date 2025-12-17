@@ -1,0 +1,53 @@
+================================================================================
+DETAILED PERFORMANCE ANALYSIS
+================================================================================
+
+Overall Performance:
+  Pipeline Time: 3.524 ms per frame
+  Theoretical FPS: 283.73
+  Actual Processing FPS: 79.24
+
+Bottleneck Analysis (sorted by time):
+
+  1. 🔴 GPU Detection (Total)             2.239 ms ( 63.5%)
+  2. 🔴 CUDA Operations                   1.633 ms ( 46.3%)
+  3. 🟡 Frame Read                        0.616 ms ( 17.5%)
+  4. 🔴 CPU Decode                        0.569 ms ( 16.1%)
+  5. 🟢 Color Conversion                  0.203 ms (  5.8%)
+  6. 🟢 Filter Duplicates                 0.002 ms (  0.1%)
+  7. 🟢 Coordinate Scaling                0.001 ms (  0.0%)
+
+GPU Detection Breakdown:
+  Total: 2.239 ms
+    ├─ CUDA Operations: 1.633 ms (72.9%)
+    └─ CPU Decode:      0.569 ms (25.4%)
+
+Optimization Recommendations:
+
+  1. [HIGH] CPU Decode
+     Current: 0.569 ms (16.1% of pipeline)
+     Recommendation: Port CPU decode operations to GPU (estimated 2-3 weeks)
+     Potential Savings: ~0.455 ms (12.9% of pipeline)
+     Effort: High (2-3 weeks)
+     Impact: Could reduce pipeline time by 12.9% (80% of decode time)
+
+  2. [MEDIUM] CUDA Operations
+     Current: 1.633 ms (46.3% of pipeline)
+     Recommendation: Consider increasing quad_decimate (2.0 → 2.5 or 3.0) in config.txt
+     Potential Savings: ~0.245 ms (estimated 15% reduction)
+     Effort: Very Low (config change)
+     Impact: Could reduce CUDA time by ~15%. Trade-off: Slightly reduced detection accuracy for distant tags
+
+  3. [LOW] Filtering
+     Current: 0.002 ms (0.1% of pipeline)
+     Recommendation: Filtering is already highly optimized
+     Potential Savings: Negligible
+     Effort: N/A
+     Impact: No improvement needed
+
+Potential Performance Improvements:
+  Current: 3.524 ms (283.73 FPS)
+  Potential: 2.824 ms (354.11 FPS)
+  Improvement: 0.700 ms (19.9% faster)
+
+================================================================================

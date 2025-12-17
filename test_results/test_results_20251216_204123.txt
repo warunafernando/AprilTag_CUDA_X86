@@ -1,0 +1,68 @@
+Using video FPS from metadata: 211.00
+Tuned filtering parameters for early false positive rejection:
+  min_cluster_pixels: 8 (default: 5)
+  max_nmaxima: 10 (FIXED - compiled into CUDA kernel)
+  max_line_fit_mse: 6.00 (default: 10.0)
+  critical_angle: 7° (default: 10°)
+  min_white_black_diff: 8 (default: 5)
+Processing video: input/Moving.avi
+Displaying on screen (no output file)
+Resolution: 1280x1024 @ 211.00 FPS
+Min distance for duplicate filtering: 50.00 pixels
+Press 'q' or ESC to quit
+
+Completed processing 1916 frames in 72.31 seconds
+Average processing FPS: 26.50
+Total detections before filtering: 7412
+Total detections after filtering: 1888
+Average per frame: 3 -> 0
+
+========== Detailed Timing Statistics ==========
+Frame Read:
+  Average: 0.775 ms
+  Min:     0.425 ms
+  Max:     9.954 ms
+  Total:   1484.011 ms (1.484 s)
+Color Conversion:
+  Average: 0.307 ms
+  Min:     0.128 ms
+  Max:     7.878 ms
+  Total:   588.670 ms (0.589 s)
+GPU Detection (Total):
+  Average: 7.363 ms
+  Min:     1.689 ms
+  Max:     273.029 ms
+  Total:   14106.554 ms (14.107 s)
+  └─ CUDA Operations (GPU):
+  Average: 3.634 ms
+  Min:     1.496 ms
+  Max:     69.708 ms
+  Total:   6930.158 ms (6.930 s)
+  └─ CPU Decode (Tag ID):
+  Average: 2.914 ms
+  Min:     0.122 ms
+  Max:     28.891 ms
+  Total:   5580.314 ms (5.580 s)
+Coordinate Scaling:
+  Average: 0.001 ms
+  Min:     0.000 ms
+  Max:     0.031 ms
+  Total:   2.128 ms (0.002 s)
+Filter Duplicates:
+  Average: 0.004 ms
+  Min:     0.000 ms
+  Max:     0.068 ms
+  Total:   8.418 ms (0.008 s)
+Draw 3D Axes: N/A (no measurements)
+Draw Text: N/A (no measurements)
+Display (imshow):
+  Average: 0.853 ms
+  Min:     0.297 ms
+  Max:     9.990 ms
+  Total:   1632.077 ms (1.632 s)
+
+Total Pipeline Time (per frame):
+  Average: 9.303 ms
+  FPS:     107.491
+============================================
+
