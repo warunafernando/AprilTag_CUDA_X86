@@ -207,12 +207,25 @@ public:
   static bool UnDistort(double *u, double *v, const CameraMatrix *camera_matrix,
                         const DistCoeffs *distortion_coefficients);
 
+  // Enable/disable GPU decode debug helpers (no effect on detection results).
+  void SetGpuDecodeDebug(bool enabled) { gpu_decode_debug_enabled_ = enabled; }
+
+  // Copy quad samples from device to host (debug only).
+  void CopyQuadSamplesTo(uint8_t *output, size_t max_elements);
+
+  // Compare CPU vs GPU quad sampling for a limited number of quads (debug only).
+  void DebugCompareCpuGpuSamples(int max_quads);
+
 private:
   void UpdateFitQuads();
 
   void AdjustPixelCenters();
 
   void DecodeTags();
+
+  // Debug helper: GPU-side quad sampling for future GPU decode work.
+  // Currently a stub; does not affect detection results.
+  void SampleQuadsOnGpuDebug();
 
   static void QuadDecodeTask(void *_u);
 
@@ -358,6 +371,12 @@ private:
   size_t execution_count_ = 0;
   // True if this is the first detection.
   bool first_ = true;
+
+  // Debug flag to control GPU decode helper paths.
+  bool gpu_decode_debug_enabled_ = false;
+
+  // Device buffer for future GPU-based quad sampling (debug only for now).
+  GpuMemory<uint8_t> quad_samples_device_;
 
   // Cached quantities used for tag filtering.
   bool normal_border_ = false;

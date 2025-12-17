@@ -8,6 +8,15 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <deque>
+#include <atomic>
+
+#if defined(__CUDACC__)
+#pragma diag_suppress 611  // Suppress MultiBandBlender override warning from OpenCV when compiling with nvcc
+#endif
 
 #include "apriltag_gpu.h"
 #include "apriltag_utils.h"
@@ -22,6 +31,26 @@ extern "C" {
 
 using namespace std;
 using namespace cv;
+
+struct DrawDet {
+  double corners[4][2];
+  int id;
+  double decision_margin;
+};
+
+struct DrawItem {
+  Mat gray;
+  vector<DrawDet> dets;
+  double current_fps;
+  size_t frame_num;
+  int det_before;
+  int det_after;
+};
+
+struct FrameItem {
+  Mat gray;
+  size_t idx;
+};
 
 // Calculate distance between two detection centers
 double detection_distance(apriltag_detection_t *det1, apriltag_detection_t *det2) {
@@ -125,19 +154,24 @@ void draw_3d_axes(Mat &im, apriltag_detection_t *det,
   Mat dist_coeffs = (Mat_<double>(5, 1) <<
     dist.k1, dist.k2, dist.p1, dist.p2, dist.k3);
 
-  // Estimate pose from homography
-  apriltag_detection_info_t info;
-  info.det = det;
-  info.tagsize = tag_size;
-  info.fx = cam.fx;
-  info.fy = cam.fy;
-  info.cx = cam.cx;
-  info.cy = cam.cy;
+  // Object points in tag coordinate frame (centered, z = 0)
+  double s = tag_size * 0.5;
+  vector<Point3f> object_points = {
+      Point3f(-s, -s, 0),
+      Point3f( s, -s, 0),
+      Point3f( s,  s, 0),
+      Point3f(-s,  s, 0)};
 
-  apriltag_pose_t pose;
-  double err = estimate_tag_pose(&info, &pose);
-  
-  if (err > 0.1) {
+  // Image points from detection
+  vector<Point2f> image_points = {
+      Point2f(det->p[0][0], det->p[0][1]),
+      Point2f(det->p[1][0], det->p[1][1]),
+      Point2f(det->p[2][0], det->p[2][1]),
+      Point2f(det->p[3][0], det->p[3][1])};
+
+  Mat rvec, tvec;
+  bool ok = solvePnP(object_points, image_points, camera_matrix, dist_coeffs, rvec, tvec);
+  if (!ok) {
     // If pose estimation failed, just draw outline
     line(im, Point(det->p[0][0], det->p[0][1]),
          Point(det->p[1][0], det->p[1][1]), Scalar(0, 255, 255), 2);
@@ -149,22 +183,6 @@ void draw_3d_axes(Mat &im, apriltag_detection_t *det,
          Point(det->p[0][0], det->p[0][1]), Scalar(0, 255, 255), 2);
     return;
   }
-
-  // Convert apriltag pose to OpenCV format
-  Mat rvec, tvec;
-  
-  // Convert rotation matrix to rotation vector
-  Mat R = (Mat_<double>(3, 3) <<
-    pose.R->data[0], pose.R->data[1], pose.R->data[2],
-    pose.R->data[3], pose.R->data[4], pose.R->data[5],
-    pose.R->data[6], pose.R->data[7], pose.R->data[8]);
-  
-  Rodrigues(R, rvec);
-  
-  tvec = (Mat_<double>(3, 1) <<
-    pose.t->data[0],
-    pose.t->data[1],
-    pose.t->data[2]);
 
   // Use OpenCV's drawFrameAxes to draw 3D axes
   drawFrameAxes(im, camera_matrix, dist_coeffs, rvec, tvec, tag_size * 0.5, 3);
@@ -233,6 +251,24 @@ int main(int argc, char **argv) {
 
   // Load configuration from config.txt
   ConfigParser config("config.txt");
+  // Config-driven overrides with sensible defaults
+  family = config.get_string("detector.family", family);
+  tag_size = config.get_double("tag_size_meters", tag_size);
+  min_distance = config.get_double("filtering.min_distance_for_duplicates", min_distance);
+  const double cfg_fx = config.get_double("camera.fx", 905.495617);
+  const double cfg_fy = config.get_double("camera.fy", 609.916016);
+  const double cfg_cx = config.get_double("camera.cx", 907.909470);
+  const double cfg_cy = config.get_double("camera.cy", 352.682645);
+  const double cfg_k1 = config.get_double("distortion.k1", 0.059238);
+  const double cfg_k2 = config.get_double("distortion.k2", -0.075154);
+  const double cfg_p1 = config.get_double("distortion.p1", -0.003801);
+  const double cfg_p2 = config.get_double("distortion.p2", 0.001113);
+  const double cfg_k3 = config.get_double("distortion.k3", 0.0);
+  const bool prefetch_enabled = config.get_bool("prefetching.enabled", false);
+  const int cfg_prefetch_q = std::max(1, config.get_int("prefetching.queue_size", 2));
+  const bool prefetch_drop_oldest = config.get_bool("prefetching.drop_oldest", true);
+  const int cfg_writer_q = std::max(1, config.get_int("writer.queue_size", 5));
+  const bool writer_drop_oldest = config.get_bool("writer.drop_oldest", true);
 
   // Use OpenCV VideoCapture and ask backend for grayscale frames
   VideoCapture cap(video_path, CAP_ANY);
@@ -276,22 +312,27 @@ int main(int argc, char **argv) {
   setup_tag_family(&tf, family.c_str());
   apriltag_detector_t *td = apriltag_detector_create();
   apriltag_detector_add_family(td, tf);
+  // Respect config but enforce kernel constraint on quad_decimate (must be 2.0)
+  const double cfg_decimate = config.get_double("detector.quad_decimate", 2.0);
+  if (fabs(cfg_decimate - 2.0) > 1e-6) {
+    cout << "Warning: quad_decimate is forced to 2.0 (config requested " << cfg_decimate
+         << ") due to CUDA kernel constraint.\n";
+  }
   td->quad_decimate = 2.0;
-  td->quad_sigma = 0.0;
-  td->nthreads = 1;
-  td->debug = false;
-  td->refine_edges = true;
-  td->wp = workerpool_create(1);
+  td->quad_sigma = config.get_double("detector.quad_sigma", 0.0);
+  td->nthreads = std::max(1, config.get_int("detector.nthreads", 1));
+  td->debug = config.get_bool("detector.debug", false);
+  td->refine_edges = config.get_bool("detector.refine_edges", true);
+  td->wp = workerpool_create(td->nthreads);
 
-  frc971::apriltag::CameraMatrix cam{905.495617, 609.916016, 907.909470, 352.682645};
-  frc971::apriltag::DistCoeffs dist{0.059238, -0.075154, -0.003801, 0.001113, 0.0};
+  frc971::apriltag::CameraMatrix cam{cfg_fx, cfg_cx, cfg_fy, cfg_cy};
+  frc971::apriltag::DistCoeffs dist{cfg_k1, cfg_k2, cfg_p1, cfg_p2, cfg_k3};
 
   frc971::apriltag::GpuDetector detector(width, height, td, cam, dist);
+  // Leave GPU decode debug disabled by default; enable manually if needed.
+  // detector.SetGpuDecodeDebug(true);
 
   // Create output video writer
-  // Convert grayscale to BGR for visualization
-  Mat color_frame;
-  cvtColor(frame, color_frame, COLOR_GRAY2BGR);
   VideoWriter writer(output_path, VideoWriter::fourcc('X', 'V', 'I', 'D'), 
                      fps, Size(width, height), true);
   if (!writer.isOpened()) {
@@ -304,97 +345,122 @@ int main(int argc, char **argv) {
   vector<double> frame_times;
   int total_detections_before = 0;
   int total_detections_after = 0;
+  // Histogram of detections per frame (before/after filtering)
+  std::map<int, int64_t> det_hist_before;
+  std::map<int, int64_t> det_hist_after;
+  // Timing accumulators (milliseconds)
+  double acc_read_ms = 0.0;
+  double acc_detect_ms = 0.0;
+  double acc_cuda_ms = 0.0;
+  double acc_cpu_decode_ms = 0.0;
+  double acc_scale_ms = 0.0;
+  double acc_filter_ms = 0.0;
+  // Track detector cumulative timings to get per-frame deltas
+  double prev_cuda_total = 0.0;
+  double prev_cpu_total = 0.0;
+  // Writer thread timing (ms)
+  double writer_draw_ms = 0.0;
+  double writer_write_ms = 0.0;
+  size_t writer_frames = 0;
+  std::atomic<double> acc_read_ms_atomic{0.0};
 
   cout << "Processing video: " << video_path << endl;
   cout << "Output: " << output_path << endl;
   cout << "Resolution: " << width << "x" << height << " @ " << fps << " FPS\n";
   cout << "Min distance for duplicate filtering: " << min_distance << " pixels\n";
 
-  // Process first frame that was already read
-  {
-    CV_Assert(frame.type() == CV_8UC1);  // Grayscale
-    CV_Assert(frame.cols == width && frame.rows == height);
+  // Thread-safe queue for draw/write
+  const size_t writer_queue_size = static_cast<size_t>(cfg_writer_q);
+  std::deque<DrawItem> queue;
+  std::mutex q_mtx;
+  std::condition_variable q_cv;
+  bool done = false;
 
-    // Detector path that was fastest originally: pass grayscale directly.
-    auto f_start = chrono::steady_clock::now();
-    detector.Detect(frame.data);
-    auto f_end = chrono::steady_clock::now();
-    double frame_ms = chrono::duration<double, milli>(f_end - f_start).count();
-    frame_times.push_back(frame_ms);
-    
-    // Calculate current FPS (rolling average)
-    double current_fps = 0.0;
-    if (frame_times.size() >= 30) {
-      double avg_ms = 0.0;
-      for (size_t i = frame_times.size() - 30; i < frame_times.size(); i++) {
-        avg_ms += frame_times[i];
+  // Thread-safe queue for frame prefetch
+  const size_t prefetch_queue_size = static_cast<size_t>(cfg_prefetch_q);
+  std::deque<FrameItem> frame_queue;
+  std::mutex fq_mtx;
+  std::condition_variable fq_cv;
+  bool reader_done = false;
+
+  // Writer thread owns VideoWriter to keep it thread-safe
+  std::thread writer_thread([&]() {
+    while (true) {
+      DrawItem item;
+      {
+        std::unique_lock<std::mutex> lk(q_mtx);
+        q_cv.wait(lk, [&]() { return done || !queue.empty(); });
+        if (queue.empty()) {
+          if (done) break;
+          else continue;  // wait again
+        }
+        item = std::move(queue.front());
+        queue.pop_front();
       }
-      avg_ms /= 30.0;
-      current_fps = 1000.0 / avg_ms;
-    } else if (frame_times.size() > 1) {
-      double avg_ms = 0.0;
-      for (double t : frame_times) avg_ms += t;
-      avg_ms /= frame_times.size();
-      current_fps = 1000.0 / avg_ms;
-    }
 
-    // Get detections
-    const zarray_t *detections = detector.Detections();
-    total_detections_before += zarray_size(detections);
-    
-    // IMPORTANT: Scale GPU detector coordinates from decimated to full resolution
-    // The GPU detector returns coordinates in decimated space (quad_decimate = 2.0)
-    const double gpu_decimate = td->quad_decimate;
-    if (gpu_decimate > 1.0) {
-      for (int i = 0; i < zarray_size(detections); i++) {
-        apriltag_detection_t *det;
-        zarray_get(const_cast<zarray_t *>(detections), i, &det);
-        scale_detection_coordinates(det, gpu_decimate);
+      // Draw in writer thread
+      auto draw_start = chrono::steady_clock::now();
+      Mat color;
+      cvtColor(item.gray, color, COLOR_GRAY2BGR);
+      for (const auto &d : item.dets) {
+        apriltag_detection_t det_tmp{};
+        for (int j = 0; j < 4; ++j) {
+          det_tmp.p[j][0] = d.corners[j][0];
+          det_tmp.p[j][1] = d.corners[j][1];
+        }
+        det_tmp.id = d.id;
+        det_tmp.decision_margin = d.decision_margin;
+        draw_3d_axes(color, &det_tmp, cam, dist, tag_size);
+      }
+      // HUD
+      stringstream info_text;
+      info_text << "Frame: " << item.frame_num << " | FPS: " << fixed << setprecision(1) << item.current_fps;
+      putText(color, info_text.str(), Point(10, 30),
+              FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
+      stringstream det_text;
+      det_text << "Tags: " << item.det_after << " (from " << item.det_before << ")";
+      Size det_size = getTextSize(det_text.str(), FONT_HERSHEY_SIMPLEX, 1.0, 2, nullptr);
+      putText(color, det_text.str(), Point(width - det_size.width - 10, 30),
+              FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
+      auto draw_end = chrono::steady_clock::now();
+
+      auto write_start = chrono::steady_clock::now();
+      writer.write(color);
+      auto write_end = chrono::steady_clock::now();
+
+      writer_draw_ms += chrono::duration<double, milli>(draw_end - draw_start).count();
+      writer_write_ms += chrono::duration<double, milli>(write_end - write_start).count();
+      writer_frames++;
+    }
+  });
+
+  auto process_frame = [&](const Mat &frame_ref) {
+    // Enforce queue bound to avoid blocking detect
+    {
+      std::lock_guard<std::mutex> lk(q_mtx);
+      if (queue.size() >= writer_queue_size) {
+        if (writer_drop_oldest && !queue.empty()) {
+          queue.pop_front();  // drop oldest
+        } else {
+          return;  // drop this frame's draw/write to avoid blocking
+        }
       }
     }
-    
-    // Filter duplicates (also filters out invalid coordinates)
-    vector<apriltag_detection_t*> filtered = filter_duplicates(detections, width, height, min_distance);
-    total_detections_after += filtered.size();
-    
-    // Convert grayscale to color for visualization
-    cvtColor(frame, color_frame, COLOR_GRAY2BGR);
-    
-    // Draw 3D visualization for each filtered detection
-    for (auto *det : filtered) {
-      draw_3d_axes(color_frame, det, cam, dist, tag_size);
-    }
-
-    // Draw frame number and FPS counter (top left)
-    stringstream info_text;
-    info_text << "Frame: " << frame_num << " | FPS: " << fixed << setprecision(1) << current_fps;
-    putText(color_frame, info_text.str(), Point(10, 30),
-            FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-    
-    // Draw detection count (top right) - show both before and after filtering
-    stringstream det_text;
-    det_text << "Tags: " << filtered.size() << " (from " << zarray_size(detections) << ")";
-    Size det_size = getTextSize(det_text.str(), FONT_HERSHEY_SIMPLEX, 1.0, 2, nullptr);
-    putText(color_frame, det_text.str(), Point(width - det_size.width - 10, 30),
-            FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-
-    // Write frame
-    writer.write(color_frame);
-
-    frame_num++;
-  }
-
-  // Continue with remaining frames
-  while (cap.read(frame)) {
-    CV_Assert(frame.type() == CV_8UC1);  // Grayscale
-    CV_Assert(frame.cols == width && frame.rows == height);
 
     // Fastest path: pass grayscale directly to detector.
     auto f_start = chrono::steady_clock::now();
-    detector.Detect(frame.data);
+    detector.Detect(frame_ref.data);
     auto f_end = chrono::steady_clock::now();
     double frame_ms = chrono::duration<double, milli>(f_end - f_start).count();
     frame_times.push_back(frame_ms);
+    acc_detect_ms += frame_ms;
+    // CUDA vs CPU decode split
+    double cur_cuda = detector.GetCudaOperationsDurationMs();
+    double cur_cpu  = detector.GetCpuDecodeDurationMs();
+    acc_cuda_ms += (cur_cuda - prev_cuda_total);
+    acc_cpu_decode_ms += (cur_cpu - prev_cpu_total);
+    prev_cuda_total = cur_cuda;
+    prev_cpu_total = cur_cpu;
     
     // Calculate current FPS (rolling average)
     double current_fps = 0.0;
@@ -414,10 +480,12 @@ int main(int argc, char **argv) {
 
     // Get detections
     const zarray_t *detections = detector.Detections();
-    total_detections_before += zarray_size(detections);
+    int det_before = zarray_size(detections);
+    total_detections_before += det_before;
+    det_hist_before[det_before]++;
     
+    auto scale_start = chrono::steady_clock::now();
     // IMPORTANT: Scale GPU detector coordinates from decimated to full resolution
-    // The GPU detector returns coordinates in decimated space (quad_decimate = 2.0)
     const double gpu_decimate = td->quad_decimate;
     if (gpu_decimate > 1.0) {
       for (int i = 0; i < zarray_size(detections); i++) {
@@ -426,34 +494,42 @@ int main(int argc, char **argv) {
         scale_detection_coordinates(det, gpu_decimate);
       }
     }
+    auto scale_end = chrono::steady_clock::now();
+    acc_scale_ms += chrono::duration<double, milli>(scale_end - scale_start).count();
     
+    auto filt_start = chrono::steady_clock::now();
     // Filter duplicates (also filters out invalid coordinates)
     vector<apriltag_detection_t*> filtered = filter_duplicates(detections, width, height, min_distance);
-    total_detections_after += filtered.size();
+    int det_after = static_cast<int>(filtered.size());
+    total_detections_after += det_after;
+    det_hist_after[det_after]++;
+    auto filt_end = chrono::steady_clock::now();
+    acc_filter_ms += chrono::duration<double, milli>(filt_end - filt_start).count();
     
-    // Convert grayscale to color for visualization
-    cvtColor(frame, color_frame, COLOR_GRAY2BGR);
-    
-    // Draw 3D visualization for each filtered detection
+    // Prepare draw task
+    DrawItem item;
+    item.gray = frame_ref.clone();
+    item.current_fps = current_fps;
+    item.frame_num = frame_num;
+    item.det_before = det_before;
+    item.det_after = det_after;
+    item.dets.reserve(filtered.size());
     for (auto *det : filtered) {
-      draw_3d_axes(color_frame, det, cam, dist, tag_size);
+      DrawDet dd{};
+      dd.id = det->id;
+      dd.decision_margin = det->decision_margin;
+      for (int j = 0; j < 4; ++j) {
+        dd.corners[j][0] = det->p[j][0];
+        dd.corners[j][1] = det->p[j][1];
+      }
+      item.dets.push_back(dd);
     }
 
-    // Draw frame number and FPS counter (top left)
-    stringstream info_text;
-    info_text << "Frame: " << frame_num << " | FPS: " << fixed << setprecision(1) << current_fps;
-    putText(color_frame, info_text.str(), Point(10, 30),
-            FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-    
-    // Draw detection count (top right) - show both before and after filtering
-    stringstream det_text;
-    det_text << "Tags: " << filtered.size() << " (from " << zarray_size(detections) << ")";
-    Size det_size = getTextSize(det_text.str(), FONT_HERSHEY_SIMPLEX, 1.0, 2, nullptr);
-    putText(color_frame, det_text.str(), Point(width - det_size.width - 10, 30),
-            FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-
-    // Write frame
-    writer.write(color_frame);
+    {
+      std::lock_guard<std::mutex> lk(q_mtx);
+      queue.push_back(std::move(item));
+    }
+    q_cv.notify_one();
 
     frame_num++;
     if (frame_num % 100 == 0) {
@@ -461,7 +537,98 @@ int main(int argc, char **argv) {
            << "Avg detections: " << (total_detections_before / frame_num) 
            << " -> " << (total_detections_after / frame_num) << " (filtered)\r" << flush;
     }
-  } while (cap.read(frame));
+  };
+
+  // Frame acquisition: optional prefetching via separate thread
+  if (prefetch_enabled) {
+    // Seed first frame into queue
+    {
+      std::lock_guard<std::mutex> lk(fq_mtx);
+      frame_queue.push_back(FrameItem{frame.clone(), 0});
+    }
+    fq_cv.notify_one();
+
+    std::thread reader_thread([&]() {
+      size_t idx = 1;
+      while (true) {
+        auto read_start = chrono::steady_clock::now();
+        Mat f;
+        bool ok = cap.read(f);
+        auto read_end = chrono::steady_clock::now();
+        double read_ms = chrono::duration<double, milli>(read_end - read_start).count();
+        // Atomic add for double (nvcc + libstdc++ may lack fetch_add specialization)
+        double cur = acc_read_ms_atomic.load(std::memory_order_relaxed);
+        while (!acc_read_ms_atomic.compare_exchange_weak(
+            cur, cur + read_ms, std::memory_order_relaxed)) {
+          // cur is updated with latest value by compare_exchange_weak
+        }
+
+        if (!ok || f.empty()) break;
+        CV_Assert(f.type() == CV_8UC1);
+        if (f.cols != width || f.rows != height) {
+          cerr << "Unexpected frame size in reader: " << f.cols << "x" << f.rows << endl;
+          break;
+        }
+
+        {
+          std::lock_guard<std::mutex> lk(fq_mtx);
+          if (frame_queue.size() >= prefetch_queue_size) {
+            if (prefetch_drop_oldest && !frame_queue.empty()) {
+              frame_queue.pop_front();
+            } else {
+              continue;  // drop this frame
+            }
+          }
+          frame_queue.push_back(FrameItem{std::move(f), idx++});
+        }
+        fq_cv.notify_one();
+      }
+      {
+        std::lock_guard<std::mutex> lk(fq_mtx);
+        reader_done = true;
+      }
+      fq_cv.notify_all();
+    });
+
+    // Consume frames from queue
+    while (true) {
+      FrameItem item;
+      {
+        std::unique_lock<std::mutex> lk(fq_mtx);
+        fq_cv.wait(lk, [&]() { return reader_done || !frame_queue.empty(); });
+        if (frame_queue.empty()) {
+          if (reader_done) break;
+          else continue;  // wait again
+        }
+        item = std::move(frame_queue.front());
+        frame_queue.pop_front();
+      }
+      process_frame(item.gray);
+    }
+
+    reader_thread.join();
+    acc_read_ms = acc_read_ms_atomic.load(std::memory_order_relaxed);
+  } else {
+    // No prefetching: synchronous read
+    process_frame(frame);
+    while (true) {
+      auto read_start = chrono::steady_clock::now();
+      if (!cap.read(frame)) break;
+      auto read_end = chrono::steady_clock::now();
+      acc_read_ms += chrono::duration<double, milli>(read_end - read_start).count();
+      CV_Assert(frame.type() == CV_8UC1);  // Grayscale
+      CV_Assert(frame.cols == width && frame.rows == height);
+      process_frame(frame);
+    }
+  }
+
+  // Finish writer thread and clean up
+  {
+    std::lock_guard<std::mutex> lk(q_mtx);
+    done = true;
+  }
+  q_cv.notify_all();
+  writer_thread.join();
 
   writer.release();
   cap.release();
@@ -478,6 +645,31 @@ int main(int argc, char **argv) {
   cout << "Average per frame: " << (total_detections_before / frame_num) 
        << " -> " << (total_detections_after / frame_num) << "\n";
   cout << "Output saved to: " << output_path << endl;
+
+  // Per-stage timing (ms per frame)
+  if (frame_num > 0) {
+    double frames = static_cast<double>(frame_num);
+    double writer_den = writer_frames > 0 ? static_cast<double>(writer_frames) : 1.0;
+    cout << "Timing (ms/frame, averages):\n";
+    cout << "  Frame read:        " << (acc_read_ms / frames) << "\n";
+    cout << "  Detect total:      " << (acc_detect_ms / frames) << "\n";
+    cout << "    CUDA ops:        " << (acc_cuda_ms / frames) << "\n";
+    cout << "    CPU decode:      " << (acc_cpu_decode_ms / frames) << "\n";
+    cout << "  Scale coordinates: " << (acc_scale_ms / frames) << "\n";
+    cout << "  Filter duplicates: " << (acc_filter_ms / frames) << "\n";
+    cout << "  Draw (axes/text):  " << (writer_draw_ms / writer_den) << "\n";
+    cout << "  Write frame:       " << (writer_write_ms / writer_den) << "\n";
+  }
+
+  auto print_hist = [&](const std::map<int, int64_t>& hist,
+                        const std::string& title) {
+    cout << title << "\n";
+    for (const auto& kv : hist) {
+      cout << "  " << kv.first << " tags: " << kv.second << " frames\n";
+    }
+  };
+  print_hist(det_hist_before, "Frame detection histogram (before filtering):");
+  print_hist(det_hist_after,  "Frame detection histogram (after  filtering):");
 
   apriltag_detector_destroy(td);
   teardown_tag_family(&tf, family.c_str());

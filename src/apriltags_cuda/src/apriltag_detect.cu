@@ -647,6 +647,9 @@ void GpuDetector::QuadDecodeTask(void *_u) {
 }
 
 void GpuDetector::DecodeTags() {
+  // Optional debug: compare CPU vs GPU quad sampling for a few quads (disabled stub).
+  DebugCompareCpuGpuSamples(5);
+
   size_t chunksize =
       1 + quad_corners_host_.size() /
               (APRILTAG_TASKS_PER_THREAD_TARGET * tag_detector_->nthreads);

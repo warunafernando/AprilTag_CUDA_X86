@@ -26,6 +26,23 @@ namespace {
 
 typedef std::chrono::duration<float, std::milli> float_milli;
 
+// Stub kernel for future GPU-based quad sampling (debug only for now).
+__global__ void SampleQuadsKernel(const uint8_t *gray_image,
+                                  int width, int height,
+                                  const FitQuad *quads,
+                                  int num_quads,
+                                  int samples_per_quad,
+                                  uint8_t *out_samples) {
+  // No-op stub; GPU sampling comparison is disabled for now.
+  (void)gray_image;
+  (void)width;
+  (void)height;
+  (void)quads;
+  (void)num_quads;
+  (void)samples_per_quad;
+  (void)out_samples;
+}
+
 // Returns true if the QuadBoundaryPoint is nonzero.
 struct NonZero {
   __host__ __device__ __forceinline__ bool operator()(
@@ -166,7 +183,8 @@ GpuDetector::GpuDetector(size_t width, size_t height,
               cub::KeyValuePair<long, MinMaxExtents>>(kMaxBlobs)),
       temp_storage_line_fit_scan_device_(
           DeviceScanInclusiveScanByKeyScratchSpace<uint32_t, LineFitPoint>(
-              sorted_selected_blobs_device_.size())) {
+              sorted_selected_blobs_device_.size())),
+      quad_samples_device_(1) {
   fit_quads_host_.reserve(kMaxBlobs);
   quad_corners_host_.reserve(kMaxBlobs);
 
@@ -224,6 +242,19 @@ void GpuDetector::ReinitializeDetections() {
 
   detections_ = zarray_create(sizeof(apriltag_detection_t *));
   zarray_ensure_capacity(detections_, kMaxBlobs);
+}
+
+void GpuDetector::DebugCompareCpuGpuSamples(int max_quads) {
+  (void)max_quads;
+}
+
+void GpuDetector::CopyQuadSamplesTo(uint8_t *output, size_t max_elements) {
+  (void)output;
+  (void)max_elements;
+}
+
+void GpuDetector::SampleQuadsOnGpuDebug() {
+  // Disabled stub for now.
 }
 
 namespace {
@@ -1118,6 +1149,9 @@ void GpuDetector::Detect(const uint8_t *image) {
   //     aos::monotonic_clock::now();
   UpdateFitQuads();
   AdjustPixelCenters();
+
+  // Debug hook for future GPU-based decode work (no effect on detections yet).
+  SampleQuadsOnGpuDebug();
 
   // Record CUDA event before CPU decode operations
   CudaEvent before_cpu_decode;

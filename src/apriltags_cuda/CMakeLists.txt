@@ -299,6 +299,9 @@ target_link_libraries(video_visualize_fixed
     glog::glog
     Threads::Threads)
 target_include_directories(video_visualize_fixed PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tools ${LIBAV_INCLUDE_DIRS} /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+# Suppress nvcc warning 611 (MultiBandBlender override) for this CUDA TU
+set_source_files_properties(tools/video_visualize_fixed.cu PROPERTIES
+    COMPILE_OPTIONS "-Xcudafe;--diag_suppress=611")
 
 add_executable(video_visualize_cpu tools/video_visualize_cpu.cu src/apriltag_utils.cu)
 target_link_libraries(video_visualize_cpu

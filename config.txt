@@ -40,4 +40,9 @@ lost_frames_output: test_results/lost_frames_list.txt
 [prefetching]
 enabled: false
 queue_size: 2
+drop_oldest: true
+
+[writer]
+queue_size: 5
+drop_oldest: true
 
