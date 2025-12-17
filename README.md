@@ -187,16 +187,47 @@ See `reports/VISUALIZATION_UPDATE_SUMMARY.md` for detailed information about vis
 ### Typical Performance (1280x1024 Grayscale Video)
 
 Performance varies based on number of detected tags and scene complexity:
-- **Processing FPS**: ~65-90 FPS (depending on detection workload)
+- **Processing FPS**: ~84-86 FPS (depending on detection workload)
 - **Per-frame timing breakdown** (typical averages):
-  - Frame read: 0.5-1.0 ms
-  - Detection total: 9-12 ms
-    - CUDA operations: 7-9 ms (~60-70% of total)
-    - CPU decode: 2-3 ms (~15-20% of total)
-  - Scale coordinates: <0.1 ms
-  - Filter duplicates: <0.1 ms
-  - Draw (axes/text): 1-2 ms
-  - Write frame: 2-5 ms (when enabled, runs in parallel)
+  - Frame read: 0.56-0.58 ms (Reader thread, non-blocking)
+  - Detection total: 2.25-2.28 ms
+    - CUDA operations: 1.51-1.55 ms (~67-68% of detection)
+    - CPU decode: 0.69-0.70 ms (~30-31% of detection)
+  - Scale coordinates: <0.01 ms
+  - Filter duplicates: <0.01 ms
+  - Draw (axes/text): 8.81-9.09 ms (largest component, includes visualization)
+  - Write frame: 2-5 ms (when enabled, runs in parallel Writer thread)
+
+### Multi-Threaded Architecture
+
+The application uses a three-thread architecture to maximize performance:
+
+1. **Reader Thread** (Frame Prefetching)
+   - Prefetches frames from video file in parallel
+   - Maintains a bounded queue (default: 10 frames)
+   - Eliminates blocking I/O from main detection loop
+   - Thread-safe timing accumulation
+
+2. **Main Detection Thread**
+   - Performs GPU-accelerated AprilTag detection
+   - Scales coordinates, filters duplicates
+   - Draws 3D visualization and information table
+   - Displays frames on screen
+   - Optionally enqueues frames for writing
+
+3. **Writer Thread** (Video Output, optional)
+   - Writes processed frames to output file in parallel
+   - Only active when `--output` is specified
+   - Maintains a bounded queue (default: 5 frames)
+   - Prevents I/O from blocking detection
+
+**Threading Benefits**:
+- Non-blocking frame reading (0.56-0.58 ms in parallel)
+- Parallel video writing capability (when enabled)
+- Overall throughput: ~84-86 FPS for 1280x1024 video
+- Detection pipeline alone: ~440-450 FPS potential
+
+See `reports/THREADING_ARCHITECTURE_AND_TEST_RESULTS.md` for detailed threading analysis and test results.
 
 ### Detection Quality
 - **Detection accuracy**: ~99%+ with coordinate fixes
@@ -214,6 +245,9 @@ All detector parameters can be configured via `config.txt`. Key settings include
 - **Distortion coefficients**: Radial and tangential distortion
 - **Tag size**: Physical tag size in meters
 - **Filtering parameters**: Minimum distance for duplicate filtering
+- **Threading parameters**:
+  - `[prefetching]`: Frame prefetching queue size and policy
+  - `[writer]`: Video output queue size and policy
 
 See `config.txt` for all available options and default values.
 
