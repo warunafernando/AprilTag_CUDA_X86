@@ -1,0 +1,41 @@
+Moving.avi timing after display thread:
+[ WARN:0@7.463] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.466] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.469] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.472] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.475] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.478] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.480] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.483] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.485] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.488] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.490] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.494] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.496] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.499] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@7.502] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+
+Completed processing 1916 frames in 7.28 seconds
+Average processing FPS: 263.02
+Total detections before filtering: 6641
+Total detections after filtering: 1381
+Average per frame: 3 -> 0
+Output not saved (display only; pass --output to write).
+Timing (ms/frame, averages):
+  Frame read:        0.52
+  Detect total:      2.31
+    CUDA ops:        1.55
+    CPU decode:      0.73
+  Scale coordinates: 0.00
+  Filter duplicates: 0.00
+  Draw (axes/text):  0.49
+  Write frame:       0.00
+Frame detection histogram (before filtering):
+  0 tags: 24 frames
+  1 tags: 2 frames
+  2 tags: 133 frames
+  3 tags: 655 frames
+  4 tags: 1102 frames
+Frame detection histogram (after  filtering):
+  0 tags: 535 frames
+  1 tags: 1381 frames

@@ -1,0 +1,41 @@
+Stable.avi timing after display thread:
+Processed 2000 frames... Avg detections: 3 -> 0 (filtered)[ WARN:0@24.091] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.104] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.116] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.127] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.140] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.151] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.163] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.175] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.187] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.198] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.210] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.222] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.234] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.246] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.258] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.270] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.282] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+[ WARN:0@24.294] global cap_ffmpeg_impl.hpp:1657 retrieveFrame Unknown/unsupported picture format: yuv420p, will be treated as 8UC1.
+
+Completed processing 2018 frames in 24.04 seconds
+Average processing FPS: 83.96
+Total detections before filtering: 8068
+Total detections after filtering: 2017
+Average per frame: 3 -> 0
+Output not saved (display only; pass --output to write).
+Timing (ms/frame, averages):
+  Frame read:        0.56
+  Detect total:      2.25
+    CUDA ops:        1.51
+    CPU decode:      0.70
+  Scale coordinates: 0.00
+  Filter duplicates: 0.00
+  Draw (axes/text):  9.09
+  Write frame:       0.00
+Frame detection histogram (before filtering):
+  0 tags: 1 frames
+  4 tags: 2017 frames
+Frame detection histogram (after  filtering):
+  0 tags: 1 frames
+  1 tags: 2017 frames

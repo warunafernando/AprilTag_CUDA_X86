@@ -36,7 +36,7 @@ drop_oldest = true
 
 ### Thread 2: Main Detection Thread
 
-**Purpose**: Core processing thread that performs AprilTag detection, coordinate scaling, filtering, and visualization.
+**Purpose**: Core processing thread that performs AprilTag detection, coordinate scaling, filtering, and overlay rendering.
 
 **Responsibilities**:
 1. Consumes frames from the reader thread's queue
@@ -45,32 +45,39 @@ drop_oldest = true
 4. Filters duplicate detections
 5. Draws 3D visualization (axes, outlines, tag IDs)
 6. Renders information table (FPS, tag data)
-7. Displays frame on screen (`imshow`)
-8. Optionally enqueues frames for writing (if output enabled)
+7. Enqueues fully rendered frames for display and optional writing
 
-**Performance Characteristics**:
-- This is the bottleneck thread - all detection and visualization happens here
-- Typical frame processing time: 9-12 ms per frame
-- Breakdown:
-  - CUDA operations: 1.5-2.0 ms (~60-70% of detection time)
-  - CPU decode: 0.7-1.0 ms (~15-20% of detection time)
-  - Drawing/visualization: 8-9 ms (largest component, but necessary for display)
+**Performance Characteristics (after moving display to its own thread)**:
+- This thread is now focused on detection and overlay rendering only
+- Typical per-frame timing (Stable & Moving videos, 1280x1024):
+  - Frame read (reader thread): 0.52-0.53 ms
+  - Detect total: 2.30-2.31 ms
+    - CUDA operations: 1.51-1.55 ms
+    - CPU decode: 0.73-0.76 ms
+  - Scale coordinates: <0.01 ms
+  - Filter duplicates: <0.01 ms
+  - Draw (axes/text, without display): 0.49-0.76 ms
+  - Write frame: 0.00 ms (when disabled)
+- Effective detector-thread FPS:
+  - Stable.avi: ~245 FPS
+  - Moving.avi: ~263 FPS
 
-### Thread 3: Writer Thread (Video Output)
+### Thread 3: Display/Writer Thread
 
-**Purpose**: Writes processed frames to output video file in parallel, preventing I/O from blocking detection.
+**Purpose**: Displays frames on screen and (optionally) writes processed frames to output video in parallel, preventing GUI and I/O from blocking detection.
 
 **Implementation**:
-- Runs as a separate `std::thread` (only when `--output` is specified)
+- Runs as a separate `std::thread`
 - Maintains a bounded queue (`std::deque<DrawItem>`) with configurable size (default: 5 frames)
 - Uses `std::mutex` and `std::condition_variable` for thread-safe operations
-- Owns the `VideoWriter` object to ensure thread safety
+- Owns the `VideoWriter` object to ensure thread safety when output is enabled
 - Queue management policy: Can drop oldest frames when queue is full (configurable)
 
 **Benefits**:
+- Display (`imshow`/`waitKey`) does not block detection
 - Video writing (typically 2-5 ms per frame) does not block detection
 - Allows real-time display while simultaneously writing to file
-- Prevents frame drops when disk I/O is slow
+- Prevents frame drops when disk I/O or display is slow
 
 **Configuration** (in `config.txt`):
 ```ini
@@ -116,23 +123,23 @@ Default behavior is "drop oldest" to maintain real-time processing.
 
 ### Test 1: Stable Video (`input/Stable.avi`)
 
-**Results**:
+**Results (after moving display to its own thread)**:
 ```
-Completed processing 2018 frames in 24.04 seconds
-Average processing FPS: 83.96
+Completed processing 2018 frames in 8.23 seconds
+Average processing FPS: 245.21
 Total detections before filtering: 8068
 Total detections after filtering: 2017
 Average per frame: 3 -> 0 (filtered to 1 tag per frame)
 ```
 
-**Timing Breakdown** (ms/frame, averages):
-- Frame read: **0.56 ms** (Reader thread, non-blocking)
-- Detect total: **2.25 ms**
-  - CUDA ops: **1.51 ms** (67% of detection)
-  - CPU decode: **0.70 ms** (31% of detection)
+**Timing Breakdown** (ms/frame, averages, main detection thread):
+- Frame read: **0.53 ms** (Reader thread, non-blocking)
+- Detect total: **2.30 ms**
+  - CUDA ops: **1.51 ms**
+  - CPU decode: **0.76 ms**
 - Scale coordinates: **0.00 ms** (<0.01 ms)
 - Filter duplicates: **0.00 ms** (<0.01 ms)
-- Draw (axes/text): **9.09 ms** (largest component)
+- Draw (axes/text): **0.76 ms** (overlays only, display handled in separate thread)
 - Write frame: **0.00 ms** (not enabled in this test)
 
 **Detection Histogram**:
@@ -151,23 +158,23 @@ Average per frame: 3 -> 0 (filtered to 1 tag per frame)
 
 ### Test 2: Moving Video (`input/Moving.avi`)
 
-**Results**:
+**Results (after moving display to its own thread)**:
 ```
-Completed processing 1916 frames in 22.37 seconds
-Average processing FPS: 85.67
+Completed processing 1916 frames in 7.28 seconds
+Average processing FPS: 263.02
 Total detections before filtering: 6641
 Total detections after filtering: 1381
 Average per frame: 3 -> 0 (filtered to 1 tag per frame)
 ```
 
-**Timing Breakdown** (ms/frame, averages):
-- Frame read: **0.58 ms** (Reader thread, non-blocking)
-- Detect total: **2.28 ms**
-  - CUDA ops: **1.55 ms** (68% of detection)
-  - CPU decode: **0.69 ms** (30% of detection)
+**Timing Breakdown** (ms/frame, averages, main detection thread):
+- Frame read: **0.52 ms** (Reader thread, non-blocking)
+- Detect total: **2.31 ms**
+  - CUDA ops: **1.55 ms**
+  - CPU decode: **0.73 ms**
 - Scale coordinates: **0.00 ms** (<0.01 ms)
 - Filter duplicates: **0.00 ms** (<0.01 ms)
-- Draw (axes/text): **8.81 ms** (largest component)
+- Draw (axes/text): **0.49 ms** (overlays only, display handled in separate thread)
 - Write frame: **0.00 ms** (not enabled in this test)
 
 **Detection Histogram**:

@@ -187,16 +187,16 @@ See `reports/VISUALIZATION_UPDATE_SUMMARY.md` for detailed information about vis
 ### Typical Performance (1280x1024 Grayscale Video)
 
 Performance varies based on number of detected tags and scene complexity:
-- **Processing FPS**: ~84-86 FPS (depending on detection workload)
-- **Per-frame timing breakdown** (typical averages):
-  - Frame read: 0.56-0.58 ms (Reader thread, non-blocking)
-  - Detection total: 2.25-2.28 ms
-    - CUDA operations: 1.51-1.55 ms (~67-68% of detection)
-    - CPU decode: 0.69-0.70 ms (~30-31% of detection)
+- **Processing FPS (detector thread)**: ~245-265 FPS (depending on detection workload)
+- **Per-frame timing breakdown (main detection thread, typical averages)**:
+  - Frame read: 0.52-0.53 ms (Reader thread, non-blocking)
+  - Detection total: 2.30-2.31 ms
+    - CUDA operations: 1.51-1.55 ms (~66-67% of detection)
+    - CPU decode: 0.73-0.76 ms (~32-33% of detection)
   - Scale coordinates: <0.01 ms
   - Filter duplicates: <0.01 ms
-  - Draw (axes/text): 8.81-9.09 ms (largest component, includes visualization)
-  - Write frame: 2-5 ms (when enabled, runs in parallel Writer thread)
+  - Draw (axes/text): 0.49-0.76 ms (overlays only, display is in a separate thread)
+  - Write frame: 2-5 ms (when enabled, runs in parallel display/write thread)
 
 ### Multi-Threaded Architecture
 
@@ -212,19 +212,18 @@ The application uses a three-thread architecture to maximize performance:
    - Performs GPU-accelerated AprilTag detection
    - Scales coordinates, filters duplicates
    - Draws 3D visualization and information table
-   - Displays frames on screen
-   - Optionally enqueues frames for writing
+   - Enqueues fully rendered frames for display/write
 
-3. **Writer Thread** (Video Output, optional)
-   - Writes processed frames to output file in parallel
-   - Only active when `--output` is specified
+3. **Display/Writer Thread**
+   - Displays frames on screen (`imshow`/`waitKey`)
+   - Writes processed frames to output file (when `--output` is specified)
    - Maintains a bounded queue (default: 5 frames)
-   - Prevents I/O from blocking detection
+   - Prevents display and I/O from blocking detection
 
 **Threading Benefits**:
-- Non-blocking frame reading (0.56-0.58 ms in parallel)
-- Parallel video writing capability (when enabled)
-- Overall throughput: ~84-86 FPS for 1280x1024 video
+- Non-blocking frame reading (0.52-0.53 ms in parallel)
+- Display and video writing fully decoupled from detection
+- Overall detector-thread throughput: ~245-265 FPS for 1280x1024 video
 - Detection pipeline alone: ~440-450 FPS potential
 
 See `reports/THREADING_ARCHITECTURE_AND_TEST_RESULTS.md` for detailed threading analysis and test results.

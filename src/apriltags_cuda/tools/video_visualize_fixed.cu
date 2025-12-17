@@ -462,12 +462,12 @@ int main(int argc, char **argv) {
   cout << "Resolution: " << width << "x" << height << " @ " << fps << " FPS\n";
   cout << "Min distance for duplicate filtering: " << min_distance << " pixels\n";
 
-  // Thread-safe queue for draw/write (used only if write_enabled)
+  // Thread-safe queue for draw/display/write
   const size_t writer_queue_size = static_cast<size_t>(cfg_writer_q);
-  std::deque<DrawItem> queue;
-  std::mutex q_mtx;
-  std::condition_variable q_cv;
-  bool done = false;
+  std::deque<DrawItem> draw_queue;
+  std::mutex draw_mtx;
+  std::condition_variable draw_cv;
+  bool display_done = false;
 
   // Thread-safe queue for frame prefetch
   const size_t prefetch_queue_size = static_cast<size_t>(cfg_prefetch_q);
@@ -476,32 +476,40 @@ int main(int argc, char **argv) {
   std::condition_variable fq_cv;
   bool reader_done = false;
 
-  std::thread writer_thread;
-  if (write_enabled) {
-    // Writer thread owns VideoWriter to keep it thread-safe
-    writer_thread = std::thread([&]() {
-      while (true) {
-        DrawItem item;
-        {
-          std::unique_lock<std::mutex> lk(q_mtx);
-          q_cv.wait(lk, [&]() { return done || !queue.empty(); });
-          if (queue.empty()) {
-            if (done) break;
-            else continue;  // wait again
+  // Display/write thread: owns imshow/waitKey and optionally VideoWriter
+  std::thread display_thread([&]() {
+    while (true) {
+      DrawItem item;
+      {
+        std::unique_lock<std::mutex> lk(draw_mtx);
+        draw_cv.wait(lk, [&]() { return display_done || !draw_queue.empty(); });
+        if (draw_queue.empty()) {
+          if (display_done) {
+            break;
+          } else {
+            continue;  // wait again
           }
-          item = std::move(queue.front());
-          queue.pop_front();
         }
+        item = std::move(draw_queue.front());
+        draw_queue.pop_front();
+      }
 
+      // Display on screen
+      imshow("AprilTags", item.color);
+      waitKey(1);
+
+      // Optional video writing (non-blocking for detector thread)
+      if (write_enabled) {
         auto write_start = chrono::steady_clock::now();
         writer.write(item.color);
         auto write_end = chrono::steady_clock::now();
 
-        writer_write_ms += chrono::duration<double, milli>(write_end - write_start).count();
+        writer_write_ms +=
+            chrono::duration<double, milli>(write_end - write_start).count();
         writer_frames++;
       }
-    });
-  }
+    }
+  });
 
   auto process_frame = [&](const Mat &frame_ref) {
     // Fastest path: pass grayscale directly to detector.
@@ -580,30 +588,24 @@ int main(int argc, char **argv) {
     
     // Draw information table in top-right corner
     draw_info_table(color_frame, tag_poses, current_fps);
-
-    // Show on screen (default behavior)
-    imshow("AprilTags", color_frame);
-    waitKey(1);
     auto draw_end = chrono::steady_clock::now();
     acc_draw_ms += chrono::duration<double, milli>(draw_end - draw_start).count();
 
-    if (write_enabled) {
-      // Enforce queue bound to avoid blocking detect
-      {
-        std::lock_guard<std::mutex> lk(q_mtx);
-        if (queue.size() >= writer_queue_size) {
-          if (writer_drop_oldest && !queue.empty()) {
-            queue.pop_front();  // drop oldest
-          } else {
-            goto after_enqueue;  // drop this frame's write
-          }
+    // Enqueue frame for display (and optional writing) without blocking detector
+    {
+      std::lock_guard<std::mutex> lk(draw_mtx);
+      if (draw_queue.size() >= writer_queue_size) {
+        if (writer_drop_oldest && !draw_queue.empty()) {
+          draw_queue.pop_front();  // drop oldest frame
+        } else {
+          goto after_enqueue;  // drop this frame for display/write
         }
-        DrawItem item;
-        item.color = color_frame.clone();
-        queue.push_back(std::move(item));
       }
-      q_cv.notify_one();
+      DrawItem item;
+      item.color = color_frame.clone();
+      draw_queue.push_back(std::move(item));
     }
+    draw_cv.notify_one();
 
 after_enqueue:
     frame_num++;
@@ -697,14 +699,14 @@ after_enqueue:
     }
   }
 
-  // Finish writer thread and clean up
+  // Finish display/write thread and clean up
+  {
+    std::lock_guard<std::mutex> lk(draw_mtx);
+    display_done = true;
+  }
+  draw_cv.notify_all();
+  display_thread.join();
   if (write_enabled) {
-    {
-      std::lock_guard<std::mutex> lk(q_mtx);
-      done = true;
-    }
-    q_cv.notify_all();
-    writer_thread.join();
     writer.release();
   }
   cap.release();
