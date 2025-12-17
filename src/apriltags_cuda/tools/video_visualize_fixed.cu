@@ -32,24 +32,19 @@ extern "C" {
 using namespace std;
 using namespace cv;
 
-struct DrawDet {
-  double corners[4][2];
-  int id;
-  double decision_margin;
-};
-
 struct DrawItem {
-  Mat gray;
-  vector<DrawDet> dets;
-  double current_fps;
-  size_t frame_num;
-  int det_before;
-  int det_after;
+  Mat color;  // pre-drawn BGR frame ready to display/write
 };
 
 struct FrameItem {
   Mat gray;
   size_t idx;
+};
+
+struct TagPoseInfo {
+  int id;
+  double x, y, z;  // translation components (in meters)
+  double decision_margin;
 };
 
 // Calculate distance between two detection centers
@@ -140,11 +135,17 @@ vector<apriltag_detection_t*> filter_duplicates(const zarray_t *detections, int 
   return filtered;
 }
 
-// Draw 3D axes on detected tag
-void draw_3d_axes(Mat &im, apriltag_detection_t *det, 
+// Draw 3D axes on detected tag and return pose information
+// Returns true if pose estimation succeeded, false otherwise
+bool draw_3d_axes(Mat &im, apriltag_detection_t *det, 
                   const frc971::apriltag::CameraMatrix &cam,
                   const frc971::apriltag::DistCoeffs &dist,
-                  double tag_size = 0.1) {
+                  double tag_size,
+                  TagPoseInfo &pose_info) {
+  pose_info.id = det->id;
+  pose_info.decision_margin = det->decision_margin;
+  pose_info.x = pose_info.y = pose_info.z = 0.0;
+
   // Convert camera matrix and distortion to OpenCV format
   Mat camera_matrix = (Mat_<double>(3, 3) <<
     cam.fx, 0, cam.cx,
@@ -181,16 +182,16 @@ void draw_3d_axes(Mat &im, apriltag_detection_t *det,
          Point(det->p[3][0], det->p[3][1]), Scalar(0, 255, 255), 2);
     line(im, Point(det->p[3][0], det->p[3][1]),
          Point(det->p[0][0], det->p[0][1]), Scalar(0, 255, 255), 2);
-    return;
+    // Draw tag ID only
+    stringstream ss;
+    ss << "ID:" << det->id;
+    putText(im, ss.str(), Point(det->c[0] - 30, det->c[1] - 10),
+            FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 255, 0), 2);
+    return false;
   }
 
   // Use OpenCV's drawFrameAxes to draw 3D axes
   drawFrameAxes(im, camera_matrix, dist_coeffs, rvec, tvec, tag_size * 0.5, 3);
-
-  // Calculate distance from camera to tag (magnitude of translation vector)
-  double distance = sqrt(tvec.at<double>(0) * tvec.at<double>(0) +
-                         tvec.at<double>(1) * tvec.at<double>(1) +
-                         tvec.at<double>(2) * tvec.at<double>(2));
 
   // Draw tag outline
   line(im, Point(det->p[0][0], det->p[0][1]),
@@ -202,20 +203,109 @@ void draw_3d_axes(Mat &im, apriltag_detection_t *det,
   line(im, Point(det->p[3][0], det->p[3][1]),
        Point(det->p[0][0], det->p[0][1]), Scalar(0, 255, 255), 2);
 
-  // Draw tag ID and distance near the tag center
-  stringstream tag_info;
-  tag_info << "ID:" << det->id << " Dist:" << fixed << setprecision(3) << distance << "m";
-  
-  // Position text above the tag center
-  Point text_pos(det->c[0] - 80, det->c[1] - 20);
-  putText(im, tag_info.str(), text_pos,
+  // Draw tag ID only (no distance/margin text)
+  stringstream ss;
+  ss << "ID:" << det->id;
+  putText(im, ss.str(), Point(det->c[0] - 30, det->c[1] - 10),
           FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 255, 0), 2);
 
-  // Draw tag ID and decision margin
-  stringstream ss;
-  ss << "ID:" << det->id << " M:" << fixed << setprecision(1) << det->decision_margin;
-  putText(im, ss.str(), Point(det->c[0] - 40, det->c[1] - 10),
-          FONT_HERSHEY_SIMPLEX, 0.5, Scalar(0, 255, 255), 2);
+  // Extract pose information
+  pose_info.x = tvec.at<double>(0);
+  pose_info.y = tvec.at<double>(1);
+  pose_info.z = tvec.at<double>(2);
+
+  return true;
+}
+
+// Draw information table in top-left corner
+void draw_info_table(Mat &im, const vector<TagPoseInfo> &tags, double fps) {
+  const int table_width = 220;
+  const int table_x = 10;  // Position on left side
+  const int start_y = 10;
+  const int line_height = 25;
+  const double font_scale = 0.38;
+  const int thickness = 1;
+  const Scalar text_color(255, 255, 255);
+  const Scalar bg_color(0, 0, 0);
+
+  // Calculate table height
+  int num_rows = 2 + tags.size();  // Header + FPS + tags
+  int table_height = num_rows * line_height + 10;
+  
+  // Draw background rectangle with border
+  rectangle(im, Point(table_x - 5, start_y - 5), 
+            Point(table_x + table_width, start_y + table_height), 
+            bg_color, -1);
+  rectangle(im, Point(table_x - 5, start_y - 5), 
+            Point(table_x + table_width, start_y + table_height), 
+            text_color, 1);
+
+  // Draw FPS header
+  int y = start_y + 20;
+  stringstream fps_ss;
+  fps_ss << "FPS: " << fixed << setprecision(1) << fps;
+  putText(im, fps_ss.str(), Point(table_x, y), 
+          FONT_HERSHEY_SIMPLEX, 0.45, text_color, thickness);
+
+  // Draw column headers
+  y = start_y + 45;
+  putText(im, "ID", Point(table_x, y), 
+          FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+  putText(im, "X", Point(table_x + 35, y), 
+          FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+  putText(im, "Y", Point(table_x + 70, y), 
+          FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+  putText(im, "Z", Point(table_x + 105, y), 
+          FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+  putText(im, "Dist", Point(table_x + 140, y), 
+          FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+  putText(im, "Prob", Point(table_x + 175, y), 
+          FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+
+  // Draw horizontal line under headers
+  line(im, Point(table_x - 5, y + 12), Point(table_x + table_width, y + 12), text_color, 1);
+
+  // Draw each tag's information
+  y = start_y + 70;
+  for (const auto &tag : tags) {
+    // Calculate distance
+    double distance = sqrt(tag.x * tag.x + tag.y * tag.y + tag.z * tag.z);
+    
+    stringstream ss;
+    ss << tag.id;
+    putText(im, ss.str(), Point(table_x, y), 
+            FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+    
+    ss.str("");
+    ss << fixed << setprecision(2) << tag.x;
+    putText(im, ss.str(), Point(table_x + 35, y), 
+            FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+    
+    ss.str("");
+    ss << fixed << setprecision(2) << tag.y;
+    putText(im, ss.str(), Point(table_x + 70, y), 
+            FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+    
+    ss.str("");
+    ss << fixed << setprecision(2) << tag.z;
+    putText(im, ss.str(), Point(table_x + 105, y), 
+            FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+    
+    ss.str("");
+    ss << fixed << setprecision(2) << distance;
+    putText(im, ss.str(), Point(table_x + 140, y), 
+            FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+    
+    ss.str("");
+    // Normalize decision margin to 0-1 range (divide by 150 as typical max for good detections)
+    double normalized_prob = tag.decision_margin / 150.0;
+    if (normalized_prob > 1.0) normalized_prob = 1.0;  // Cap at 1.0
+    ss << fixed << setprecision(2) << normalized_prob;
+    putText(im, ss.str(), Point(table_x + 175, y), 
+            FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness);
+    
+    y += line_height;
+  }
 }
 
 int main(int argc, char **argv) {
@@ -244,8 +334,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (video_path.empty() || output_path.empty()) {
-    cerr << "Error: --video and --output are required\n";
+  if (video_path.empty()) {
+    cerr << "Error: --video is required\n";
     return 1;
   }
 
@@ -332,12 +422,15 @@ int main(int argc, char **argv) {
   // Leave GPU decode debug disabled by default; enable manually if needed.
   // detector.SetGpuDecodeDebug(true);
 
-  // Create output video writer
-  VideoWriter writer(output_path, VideoWriter::fourcc('X', 'V', 'I', 'D'), 
-                     fps, Size(width, height), true);
-  if (!writer.isOpened()) {
-    cerr << "Failed to open output video: " << output_path << endl;
-    return 1;
+  const bool write_enabled = !output_path.empty();
+  VideoWriter writer;
+  if (write_enabled) {
+    writer.open(output_path, VideoWriter::fourcc('X', 'V', 'I', 'D'),
+                fps, Size(width, height), true);
+    if (!writer.isOpened()) {
+      cerr << "Failed to open output video: " << output_path << endl;
+      return 1;
+    }
   }
 
   size_t frame_num = 0;
@@ -355,11 +448,11 @@ int main(int argc, char **argv) {
   double acc_cpu_decode_ms = 0.0;
   double acc_scale_ms = 0.0;
   double acc_filter_ms = 0.0;
+  double acc_draw_ms = 0.0;
   // Track detector cumulative timings to get per-frame deltas
   double prev_cuda_total = 0.0;
   double prev_cpu_total = 0.0;
   // Writer thread timing (ms)
-  double writer_draw_ms = 0.0;
   double writer_write_ms = 0.0;
   size_t writer_frames = 0;
   std::atomic<double> acc_read_ms_atomic{0.0};
@@ -369,7 +462,7 @@ int main(int argc, char **argv) {
   cout << "Resolution: " << width << "x" << height << " @ " << fps << " FPS\n";
   cout << "Min distance for duplicate filtering: " << min_distance << " pixels\n";
 
-  // Thread-safe queue for draw/write
+  // Thread-safe queue for draw/write (used only if write_enabled)
   const size_t writer_queue_size = static_cast<size_t>(cfg_writer_q);
   std::deque<DrawItem> queue;
   std::mutex q_mtx;
@@ -383,70 +476,34 @@ int main(int argc, char **argv) {
   std::condition_variable fq_cv;
   bool reader_done = false;
 
-  // Writer thread owns VideoWriter to keep it thread-safe
-  std::thread writer_thread([&]() {
-    while (true) {
-      DrawItem item;
-      {
-        std::unique_lock<std::mutex> lk(q_mtx);
-        q_cv.wait(lk, [&]() { return done || !queue.empty(); });
-        if (queue.empty()) {
-          if (done) break;
-          else continue;  // wait again
+  std::thread writer_thread;
+  if (write_enabled) {
+    // Writer thread owns VideoWriter to keep it thread-safe
+    writer_thread = std::thread([&]() {
+      while (true) {
+        DrawItem item;
+        {
+          std::unique_lock<std::mutex> lk(q_mtx);
+          q_cv.wait(lk, [&]() { return done || !queue.empty(); });
+          if (queue.empty()) {
+            if (done) break;
+            else continue;  // wait again
+          }
+          item = std::move(queue.front());
+          queue.pop_front();
         }
-        item = std::move(queue.front());
-        queue.pop_front();
+
+        auto write_start = chrono::steady_clock::now();
+        writer.write(item.color);
+        auto write_end = chrono::steady_clock::now();
+
+        writer_write_ms += chrono::duration<double, milli>(write_end - write_start).count();
+        writer_frames++;
       }
-
-      // Draw in writer thread
-      auto draw_start = chrono::steady_clock::now();
-      Mat color;
-      cvtColor(item.gray, color, COLOR_GRAY2BGR);
-      for (const auto &d : item.dets) {
-        apriltag_detection_t det_tmp{};
-        for (int j = 0; j < 4; ++j) {
-          det_tmp.p[j][0] = d.corners[j][0];
-          det_tmp.p[j][1] = d.corners[j][1];
-        }
-        det_tmp.id = d.id;
-        det_tmp.decision_margin = d.decision_margin;
-        draw_3d_axes(color, &det_tmp, cam, dist, tag_size);
-      }
-      // HUD
-      stringstream info_text;
-      info_text << "Frame: " << item.frame_num << " | FPS: " << fixed << setprecision(1) << item.current_fps;
-      putText(color, info_text.str(), Point(10, 30),
-              FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-      stringstream det_text;
-      det_text << "Tags: " << item.det_after << " (from " << item.det_before << ")";
-      Size det_size = getTextSize(det_text.str(), FONT_HERSHEY_SIMPLEX, 1.0, 2, nullptr);
-      putText(color, det_text.str(), Point(width - det_size.width - 10, 30),
-              FONT_HERSHEY_SIMPLEX, 1.0, Scalar(255, 255, 255), 2);
-      auto draw_end = chrono::steady_clock::now();
-
-      auto write_start = chrono::steady_clock::now();
-      writer.write(color);
-      auto write_end = chrono::steady_clock::now();
-
-      writer_draw_ms += chrono::duration<double, milli>(draw_end - draw_start).count();
-      writer_write_ms += chrono::duration<double, milli>(write_end - write_start).count();
-      writer_frames++;
-    }
-  });
+    });
+  }
 
   auto process_frame = [&](const Mat &frame_ref) {
-    // Enforce queue bound to avoid blocking detect
-    {
-      std::lock_guard<std::mutex> lk(q_mtx);
-      if (queue.size() >= writer_queue_size) {
-        if (writer_drop_oldest && !queue.empty()) {
-          queue.pop_front();  // drop oldest
-        } else {
-          return;  // drop this frame's draw/write to avoid blocking
-        }
-      }
-    }
-
     // Fastest path: pass grayscale directly to detector.
     auto f_start = chrono::steady_clock::now();
     detector.Detect(frame_ref.data);
@@ -506,31 +563,49 @@ int main(int argc, char **argv) {
     auto filt_end = chrono::steady_clock::now();
     acc_filter_ms += chrono::duration<double, milli>(filt_end - filt_start).count();
     
-    // Prepare draw task
-    DrawItem item;
-    item.gray = frame_ref.clone();
-    item.current_fps = current_fps;
-    item.frame_num = frame_num;
-    item.det_before = det_before;
-    item.det_after = det_after;
-    item.dets.reserve(filtered.size());
+    auto draw_start = chrono::steady_clock::now();
+    // Draw in main thread (for display) and optionally enqueue for writing
+    Mat color_frame;
+    cvtColor(frame_ref, color_frame, COLOR_GRAY2BGR);
+    
+    // Collect tag pose information and draw axes
+    vector<TagPoseInfo> tag_poses;
     for (auto *det : filtered) {
-      DrawDet dd{};
-      dd.id = det->id;
-      dd.decision_margin = det->decision_margin;
-      for (int j = 0; j < 4; ++j) {
-        dd.corners[j][0] = det->p[j][0];
-        dd.corners[j][1] = det->p[j][1];
+      TagPoseInfo pose_info;
+      if (draw_3d_axes(color_frame, det, cam, dist, tag_size, pose_info)) {
+        // Only add tags with valid pose estimation
+        tag_poses.push_back(pose_info);
       }
-      item.dets.push_back(dd);
+    }
+    
+    // Draw information table in top-right corner
+    draw_info_table(color_frame, tag_poses, current_fps);
+
+    // Show on screen (default behavior)
+    imshow("AprilTags", color_frame);
+    waitKey(1);
+    auto draw_end = chrono::steady_clock::now();
+    acc_draw_ms += chrono::duration<double, milli>(draw_end - draw_start).count();
+
+    if (write_enabled) {
+      // Enforce queue bound to avoid blocking detect
+      {
+        std::lock_guard<std::mutex> lk(q_mtx);
+        if (queue.size() >= writer_queue_size) {
+          if (writer_drop_oldest && !queue.empty()) {
+            queue.pop_front();  // drop oldest
+          } else {
+            goto after_enqueue;  // drop this frame's write
+          }
+        }
+        DrawItem item;
+        item.color = color_frame.clone();
+        queue.push_back(std::move(item));
+      }
+      q_cv.notify_one();
     }
 
-    {
-      std::lock_guard<std::mutex> lk(q_mtx);
-      queue.push_back(std::move(item));
-    }
-    q_cv.notify_one();
-
+after_enqueue:
     frame_num++;
     if (frame_num % 100 == 0) {
       cout << "Processed " << frame_num << " frames... "
@@ -623,14 +698,15 @@ int main(int argc, char **argv) {
   }
 
   // Finish writer thread and clean up
-  {
-    std::lock_guard<std::mutex> lk(q_mtx);
-    done = true;
+  if (write_enabled) {
+    {
+      std::lock_guard<std::mutex> lk(q_mtx);
+      done = true;
+    }
+    q_cv.notify_all();
+    writer_thread.join();
+    writer.release();
   }
-  q_cv.notify_all();
-  writer_thread.join();
-
-  writer.release();
   cap.release();
 
   auto t_end = chrono::steady_clock::now();
@@ -644,7 +720,11 @@ int main(int argc, char **argv) {
   cout << "Total detections after filtering: " << total_detections_after << "\n";
   cout << "Average per frame: " << (total_detections_before / frame_num) 
        << " -> " << (total_detections_after / frame_num) << "\n";
-  cout << "Output saved to: " << output_path << endl;
+  if (write_enabled) {
+    cout << "Output saved to: " << output_path << endl;
+  } else {
+    cout << "Output not saved (display only; pass --output to write).\n";
+  }
 
   // Per-stage timing (ms per frame)
   if (frame_num > 0) {
@@ -657,7 +737,7 @@ int main(int argc, char **argv) {
     cout << "    CPU decode:      " << (acc_cpu_decode_ms / frames) << "\n";
     cout << "  Scale coordinates: " << (acc_scale_ms / frames) << "\n";
     cout << "  Filter duplicates: " << (acc_filter_ms / frames) << "\n";
-    cout << "  Draw (axes/text):  " << (writer_draw_ms / writer_den) << "\n";
+    cout << "  Draw (axes/text):  " << (acc_draw_ms / frames) << "\n";
     cout << "  Write frame:       " << (writer_write_ms / writer_den) << "\n";
   }
 

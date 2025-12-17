@@ -1,0 +1,53 @@
+=== CPU vs GPU Detector Detailed Comparison ===
+
+CRITICAL FINDINGS:
+-----------------
+
+1. DETECTION COUNT:
+   - CPU: ~1 detection per frame (CORRECT)
+   - GPU: ~3-4 detections per frame (WRONG - duplicates)
+   - GPU produces 3-4x more detections than CPU
+
+2. DETECTION LOCATION (CRITICAL ISSUE):
+   - Average center distance between CPU and GPU: 400-450 pixels
+   - Max distance: 560-716 pixels
+   - This means GPU is detecting the tag at COMPLETELY DIFFERENT locations
+   - The tag is being detected in the wrong place by the GPU detector
+
+3. PERFORMANCE:
+   - CPU: ~5-7 ms per frame
+   - GPU: ~2.5 ms per frame
+   - GPU is 2-2.6x faster BUT produces incorrect results
+
+4. TAG ID ACCURACY:
+   - Both detect tag ID 3 (correct)
+   - CPU: 1 detection per frame
+   - GPU: 3-4 detections per frame (all same ID, wrong locations)
+
+ROOT CAUSE ANALYSIS:
+-------------------
+The GPU detector has TWO major issues:
+
+1. DUPLICATE DETECTION BUG:
+   - The reconcile_detections() function is not properly filtering duplicates
+   - Multiple detection paths produce the same tag ID
+   - This is a known issue in the CUDA implementation
+
+2. WRONG DETECTION LOCATION (MORE SERIOUS):
+   - The GPU detector is detecting the tag at locations 400+ pixels away
+   - This suggests:
+     * Incorrect coordinate transformation
+     * Wrong homography calculation
+     * Coordinate system mismatch
+     * Possible issue with camera calibration parameters in GPU path
+
+RECOMMENDATIONS:
+--------------
+1. Use CPU detector for accurate results (video_visualize_cpu)
+2. GPU detector needs fixes for:
+   - Duplicate filtering (reconcile_detections)
+   - Coordinate transformation accuracy
+   - Verification that camera calibration is applied correctly
+
+The CPU detector videos (Stable_3d_cpu.avi, Moving_3d_cpu.avi) show the
+correct tag location and should be used as reference.

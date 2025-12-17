@@ -1,0 +1,59 @@
+=== 3D Visualization Video Output Summary ===
+
+Created: December 15, 2024
+
+VIDEO FILES:
+-----------
+1. Stable_3d.avi
+   - Size: 157 MB
+   - Frames: 2018
+   - Resolution: 1280x1024
+   - Processing: 81.90 FPS average
+   - Features:
+     * 3D axes visualization on detected tags (X=Red, Y=Green, Z=Blue)
+     * Frame number display (top left)
+     * Real-time FPS counter (top left)
+     * Tag count display (top right)
+     * Tag ID labels on each detection
+     * Cyan tag outline
+
+2. Moving_3d.avi
+   - Size: 247 MB
+   - Frames: 1916
+   - Resolution: 1280x1024
+   - Processing: 70.12 FPS average
+   - Features:
+     * 3D axes visualization on detected tags (X=Red, Y=Green, Z=Blue)
+     * Frame number display (top left)
+     * Real-time FPS counter (top left)
+     * Tag count display (top right)
+     * Tag ID labels on each detection
+     * Cyan tag outline
+
+VISUALIZATION DETAILS:
+---------------------
+- 3D axes are drawn using OpenCV's drawFrameAxes function
+- Axes length: 0.05 meters (half of tag size)
+- Tag size used: 0.1 meters
+- Camera calibration parameters:
+  * fx=905.495617, fy=907.909470
+  * cx=609.916016, cy=352.682645
+  * Distortion: k1=0.059238, k2=-0.075154, p1=-0.003801, p2=0.001113
+
+COLOR SCHEME:
+------------
+- X-axis (Red): Right direction
+- Y-axis (Green): Down direction
+- Z-axis (Blue): Forward direction (out of tag)
+- Tag outline: Cyan (0, 255, 255)
+- Tag ID text: Cyan
+- Info text: White
+
+TOOL USED:
+----------
+video_visualize - Custom CUDA-based visualization tool
+Location: src/apriltags_cuda/build/video_visualize
+
+Usage:
+  ./video_visualize --video <input.avi> --output <output.avi> 
+                    --family tag36h11 [--tag_size 0.1]

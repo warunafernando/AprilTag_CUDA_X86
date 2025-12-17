@@ -1,0 +1,76 @@
+================================================================================
+COORDINATE TRANSFORMATION DEBUG SUMMARY
+================================================================================
+
+Date: Generated from Stable.avi frames where both CPU and GPU detect tag ID 3
+
+KEY FINDING: GPU detector outputs coordinates in DECIMATED SPACE (half resolution)
+             The coordinate fix is NOT being applied!
+
+================================================================================
+EVIDENCE FROM FRAME 1
+================================================================================
+
+CPU Detector (Reference - Correct):
+  Corner 0: (935.11, 608.39)  [Full resolution]
+  Corner 1: (976.05, 609.39)
+  Corner 2: (976.32, 569.39)
+  Corner 3: (935.29, 568.43)
+  Center:   (955.69, 588.90)
+
+GPU Detector (Current - Wrong):
+  Corner 0: (467.90, 304.48)  [Decimated space - exactly half!]
+  Corner 1: (488.10, 305.08)
+  Corner 2: (488.34, 284.92)
+  Corner 3: (467.96, 284.38)
+  Center:   (478.07, 294.71)
+
+COORDINATE ANALYSIS:
+  Center distance: 560.95 pixels (GPU is ~477 pixels offset in X, ~294 in Y)
+  
+  Verification that GPU coords are in decimated space:
+    Corner 0: GPU*2 = 935.79 vs CPU = 935.11 (diff: 0.69 px) ✓
+    Corner 1: GPU*2 = 976.21 vs CPU = 976.05 (diff: 0.16 px) ✓
+    Corner 2: GPU*2 = 976.68 vs CPU = 976.32 (diff: 0.35 px) ✓
+    Corner 3: GPU*2 = 935.92 vs CPU = 935.29 (diff: 0.64 px) ✓
+    
+  Testing AdjustPixelCenters formula: (x - 0.5) * 2 + 0.5
+    Corner 0: decimated=467.90 → full=935.29 (CPU=935.11, diff=0.19) ✓
+    Corner 1: decimated=488.10 → full=975.71 (CPU=976.05, diff=0.34) ✓
+    Corner 2: decimated=488.34 → full=976.18 (CPU=976.32, diff=0.15) ✓
+    Corner 3: decimated=467.96 → full=935.42 (CPU=935.29, diff=0.14) ✓
+
+CONCLUSION:
+  ✓ GPU coordinates are EXACTLY in decimated space (half resolution)
+  ✓ Multiplying by 2 matches CPU coordinates within 0.7 pixels
+  ✓ The coordinate fix we added is NOT being applied
+  ✗ GPU detector is outputting wrong coordinates (400+ pixel offset)
+
+================================================================================
+ROOT CAUSE
+================================================================================
+
+The coordinate transformation fix was added to:
+1. QuadDecodeTask() - to scale coordinates after RefineEdges()
+2. RefineEdges() - to scale coordinates before UnDistort()/ReDistort()
+
+However, the fix is NOT taking effect. Possible reasons:
+1. RefineEdges() might not be enabled (td->refine_edges = true, but check if it's actually called)
+2. The coordinates might be overwritten after our fix (e.g., in quad_decode_index())
+3. The homography computation might be using decimated coordinates
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Verify that RefineEdges() is actually being called
+2. Check if quad_decode_index() or quad_update_homographies() overwrites coordinates
+3. Add debug logging to verify the fix code path is executed
+4. Consider applying the coordinate scaling at a different point in the pipeline
+5. Check if the issue is in how the final detection structure is populated
+
+================================================================================
+
+
+
+

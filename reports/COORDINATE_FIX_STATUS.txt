@@ -1,0 +1,45 @@
+================================================================================
+COORDINATE FIX STATUS - Stable.avi Test Results
+================================================================================
+
+Date: Current test run
+
+PROBLEM:
+- GPU detector coordinates are in decimated space (half resolution)
+- CPU detector coordinates are in full resolution
+- Average center distance: 940.51 pixels (still too large)
+
+ATTEMPTS:
+1. Added coordinate scaling in DecodeTags() after reconcile_detections()
+   - Always scales when quad_decimate > 1
+   - Result: Distance = 940.51 pixels (double-scaling suspected)
+
+2. Added conditional check (center < width/2 && center < height/2)
+   - Result: Distance = 366.75 pixels (better but still wrong)
+
+3. Changed check to (center < width && center < height)
+   - Result: Distance = 940.51 pixels (back to double-scaling)
+
+4. Removed check, always scale
+   - Result: Distance = 940.51 pixels (double-scaling confirmed)
+
+ROOT CAUSE HYPOTHESIS:
+- AdjustPixelCenters() scales quad corners before quad_decode_index()
+- quad_decode_index() may be using full-resolution coordinates correctly
+- Our fix is scaling coordinates that are already in full resolution
+- OR: quad_decode_index() always produces decimated coordinates regardless of input
+
+NEXT STEPS:
+1. Check if AdjustPixelCenters() is being called after DecodeTags()
+2. Verify the actual coordinate values before and after scaling
+3. Check if quad_decode_index() uses the decimated image internally
+4. Consider removing the fix and fixing at the source (in quad_decode_index() or AdjustPixelCenters())
+
+CURRENT STATUS:
+- GPU detector is finding detections (9 frames with both CPU & GPU)
+- Coordinate fix is in place but causing double-scaling
+- Need to investigate the coordinate pipeline more carefully
+
+
+
+

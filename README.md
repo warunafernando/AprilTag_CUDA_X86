@@ -47,7 +47,12 @@ StandAlone/
 ├── input/                        # Input video files
 │   ├── Stable.avi
 │   └── Moving.avi
-├── output/                       # Generated outputs (excluded from git)
+├── output/                       # Generated video outputs (excluded from git)
+├── reports/                      # Performance reports and analysis
+│   ├── VISUALIZATION_UPDATE_SUMMARY.md
+│   ├── PERFORMANCE_TIMING_REPORT.md
+│   └── [other analysis reports]
+├── config.txt                    # Configuration file for detector parameters
 ├── setup_env.sh                  # Environment setup script
 └── README.md                     # This file
 ```
@@ -79,23 +84,36 @@ ninja -j4
 
 ### Video Visualization with 3D Tags
 
-Generate output videos with 3D tag visualization, frame numbers, FPS counter, and distance measurements:
+Display or generate output videos with 3D tag visualization, real-time information table, and detailed timing:
 
 ```bash
 cd src/apriltags_cuda/build
+# Display only (default)
+./video_visualize_fixed --video /home/nav/Apriltag/StandAlone/input/Stable.avi
+
+# With output file
 ./video_visualize_fixed \
-  --video /home/nav/Apriltag/input/Stable.avi \
-  --output /home/nav/Apriltag/output/Stable_3d_fixed.avi \
+  --video /home/nav/Apriltag/StandAlone/input/Stable.avi \
+  --output /home/nav/Apriltag/StandAlone/output/Stable_3d_fixed.avi \
   --family tag36h11 \
   --tag_size 0.305
 ```
 
 **Options**:
-- `--video`: Input video path
-- `--output`: Output video path
+- `--video`: Input video path (required)
+- `--output`: Output video path (optional, if omitted, only displays on screen)
 - `--family`: Tag family (default: `tag36h11`)
 - `--tag_size`: Tag size in meters (default: `0.305` for 1-foot tags)
 - `--min_distance`: Minimum distance for duplicate filtering in pixels (default: `50.0`)
+
+**Visualization Features**:
+- **3D Axes**: Color-coded axes showing tag orientation (X=red, Y=green, Z=blue)
+- **Tag Outlines**: Yellow rectangles around detected tags
+- **Tag IDs**: Green text showing tag ID numbers
+- **Information Table**: Compact table in top-left corner displaying:
+  - Current FPS
+  - Per-tag data: ID, X, Y, Z coordinates, Distance, Probability
+  - All values with 2 decimal precision
 
 ### Compare CPU vs GPU Detectors
 
@@ -150,13 +168,54 @@ Added real-time distance calculation from camera to tag using pose estimation:
 
 Default tag size set to 0.305m (1 foot) for accurate distance measurements. Adjust with `--tag_size` parameter if your tags are different sizes.
 
+### 5. Enhanced Visualization
+
+Recent improvements to the visualization system:
+
+- **Information Table**: Compact table in top-left corner displaying:
+  - Current processing FPS
+  - Per-tag information: ID, X, Y, Z coordinates, Distance (meters), Probability (normalized 0-1)
+  - All numeric values with 2 decimal precision
+- **Optimized Layout**: Smaller fonts, compact table design
+- **3D Visualization**: Color-coded axes (X=red, Y=green, Z=blue) showing tag orientation
+- **Real-time Display**: Live video display with all visualizations overlaid
+
+See `reports/VISUALIZATION_UPDATE_SUMMARY.md` for detailed information about visualization improvements.
+
 ## Performance
 
-Typical performance on RTX 2050:
-- **Stable video**: ~38-58 FPS processing speed
-- **Moving video**: ~20-40 FPS processing speed
+### Typical Performance (1280x1024 Grayscale Video)
+
+Performance varies based on number of detected tags and scene complexity:
+- **Processing FPS**: ~65-90 FPS (depending on detection workload)
+- **Per-frame timing breakdown** (typical averages):
+  - Frame read: 0.5-1.0 ms
+  - Detection total: 9-12 ms
+    - CUDA operations: 7-9 ms (~60-70% of total)
+    - CPU decode: 2-3 ms (~15-20% of total)
+  - Scale coordinates: <0.1 ms
+  - Filter duplicates: <0.1 ms
+  - Draw (axes/text): 1-2 ms
+  - Write frame: 2-5 ms (when enabled, runs in parallel)
+
+### Detection Quality
 - **Detection accuracy**: ~99%+ with coordinate fixes
 - **Coordinate accuracy**: <1 pixel average error vs CPU detector
+- **False positive rate**: Significantly reduced with duplicate filtering
+
+See `reports/PERFORMANCE_TIMING_REPORT.md` for detailed timing analysis.
+
+## Configuration
+
+All detector parameters can be configured via `config.txt`. Key settings include:
+
+- **Detector parameters**: `quad_decimate`, filtering thresholds, etc.
+- **Camera intrinsics**: Focal length, principal point
+- **Distortion coefficients**: Radial and tangential distortion
+- **Tag size**: Physical tag size in meters
+- **Filtering parameters**: Minimum distance for duplicate filtering
+
+See `config.txt` for all available options and default values.
 
 ## Troubleshooting
 

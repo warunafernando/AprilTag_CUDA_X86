@@ -1,0 +1,48 @@
+=== CPU vs CUDA Detector Comparison ===
+
+CPU DETECTOR RESULTS:
+-------------------
+Stable.avi:
+- Total detections: 2018
+- Tag ID 3: 2017 detections (99.95% of frames)
+- Tag ID 382: 1 detection (false positive)
+- Average: ~1 detection per frame
+- Status: ✅ CORRECT - Detects one tag per frame as expected
+
+Moving.avi:
+- Total detections: 1892
+- Tag ID 3: 1892 detections (98.75% of frames)
+- Average: ~1 detection per frame
+- Status: ✅ CORRECT - Detects one tag per frame as expected
+
+CUDA DETECTOR RESULTS (before filtering):
+----------------------------------------
+Stable.avi:
+- Total detections: 6958
+- Tag ID 3: 6958 detections (all same ID)
+- Average: 3.45 detections per frame
+- Status: ❌ INCORRECT - Multiple duplicate detections
+
+Moving.avi:
+- Total detections: 7412
+- Tag ID 3: 7412 detections (all same ID)
+- Average: 3.87 detections per frame
+- Status: ❌ INCORRECT - Multiple duplicate detections
+
+CONCLUSION:
+----------
+The CPU detector correctly identifies ONE tag #3 per frame.
+The CUDA detector produces 3-4 duplicate detections of the same tag per frame.
+
+This indicates an issue with the CUDA detector's duplicate filtering logic.
+The reconcile_detections() function in the CUDA code is not properly removing
+duplicate detections of the same tag ID.
+
+RECOMMENDATION:
+--------------
+Use the CPU detector videos (Stable_3d_cpu.avi, Moving_3d_cpu.avi) as the
+reference for correct tag detection. The 3D visualization in these videos
+should show the tag at the correct location.
+
+The CUDA detector needs its duplicate filtering improved to match the CPU
+detector's behavior.

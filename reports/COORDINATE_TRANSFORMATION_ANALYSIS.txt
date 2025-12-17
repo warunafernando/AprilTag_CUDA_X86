@@ -1,0 +1,44 @@
+=== Coordinate Transformation Issue Analysis ===
+
+ROOT CAUSE IDENTIFIED:
+-------------------
+The GPU detector produces coordinates in DECIMATED SPACE (half resolution)
+even though they should be in FULL RESOLUTION.
+
+Evidence:
+- GPU corner coordinates: (467.90, 304.48)
+- CPU corner coordinates: (935.11, 608.39)
+- GPU * 2 = (935.79, 608.96) - matches CPU within 0.7 pixels!
+
+This confirms GPU coordinates are exactly HALF of what they should be.
+
+COORDINATE TRANSFORMATION PIPELINE:
+----------------------------------
+1. UpdateFitQuads() - calculates corners in decimated space
+2. AdjustPixelCenters() - scales from decimated to full resolution
+   Formula: (x - 0.5) * 2 + 0.5 = 2x - 0.5
+3. DecodeTags() - copies coordinates to quad_original
+4. RefineEdges() - recalculates corners (PROBLEM: produces decimated coords)
+5. quad_decode_index() - creates detection structure
+
+THE BUG:
+-------
+RefineEdges() recalculates corners from the full-resolution image, but
+produces coordinates in decimated space. This overwrites the correctly
+scaled coordinates from AdjustPixelCenters().
+
+FIX APPLIED:
+-----------
+Added coordinate scaling after RefineEdges() in QuadDecodeTask():
+- If quad_decimate == 2.0: (x - 0.5) * 2 + 0.5
+- If quad_decimate == 1.5: x * 1.5
+
+However, the fix may not be working if quad_decode_index() is doing
+its own coordinate transformation or overwriting the coordinates.
+
+NEXT STEPS:
+----------
+1. Verify the fix is being executed (add logging)
+2. Check if quad_decode_index() overwrites coordinates
+3. Consider disabling refine_edges as a workaround
+4. Investigate the UnDistort/ReDistort functions in RefineEdges()

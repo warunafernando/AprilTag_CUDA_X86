@@ -1,0 +1,26 @@
+Comparing CPU vs GPU detectors on: /home/nav/Apriltag/VPI_based/input/Stable.avi
+=== DETECTION COUNT COMPARISON ===
+Frames analyzed: 200
+CPU total detections: 199 (avg: 0.99 per frame)
+GPU total detections: 690 (avg: 3.45 per frame)
+GPU after filtering: 1 (avg: 0.01 per frame)
+=== FRAME-BY-FRAME COMPARISON ===
+Frames with both CPU and GPU detections: 199
+Frames with CPU only: 0
+Frames with GPU only: 0
+Frames with neither: 1
+=== TAG ID DISTRIBUTION ===
+CPU detector tag IDs:
+  Tag ID 3: 199 detections
+GPU detector tag IDs:
+  Tag ID 3: 690 detections
+=== PERFORMANCE COMPARISON ===
+CPU average time: 5.12 ms
+GPU average time: 2.74 ms
+=== DETECTION LOCATION COMPARISON ===
+=== DECISION MARGIN COMPARISON ===
+Average margin difference (CPU - GPU): inf
+Positive = CPU has higher margin, Negative = GPU has higher margin
+=== KEY FINDINGS ===
+⚠️  GPU detector produces significantly more detections (duplicates)
+⚠️  Detection centers differ significantly (>10 pixels)

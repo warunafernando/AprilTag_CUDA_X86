@@ -1,0 +1,46 @@
+=== AprilTag Detection Analysis Report ===
+
+STABLE.AVI:
+-----------
+Total Frames: 2018
+Frames with detections: 2017 (99.95%)
+Frames without detections: 1 (0.05%) - Frame 0 only
+Average detections per frame: 3.45
+Min/Max detections per frame: 0 / 4
+
+Tag Detection Details:
+- All detections are Tag ID 3
+- Multiple instances of Tag ID 3 detected per frame (3-4 detections)
+- Total tag detections across all frames: 6,958
+- Detection rate: Very stable, only frame 0 missed
+
+MOVING.AVI:
+----------
+Total Frames: 1916
+Frames with detections: 1892 (98.75%)
+Frames without detections: 24 (1.25%)
+Average detections per frame: 3.87
+Min/Max detections per frame: 0 / 4
+
+Tag Detection Details:
+- All detections are Tag ID 3
+- Multiple instances of Tag ID 3 detected per frame (2-4 detections)
+- Total tag detections across all frames: 7,412
+- Detection rate: Good, but some frames missed during motion
+- Max consecutive frames without detection: 11 frames (around frames 1192-1200)
+
+OBSERVATIONS:
+------------
+1. Both videos contain Tag ID 3, detected multiple times per frame
+2. Stable.avi has near-perfect detection (99.95% frame coverage)
+3. Moving.avi has good detection (98.75% frame coverage) with some misses during motion
+4. The multiple detections of the same tag ID per frame suggest either:
+   - Multiple physical tags with ID 3 in the scene
+   - Duplicate detections of the same tag (possible false positives)
+   - Different views/angles of the same tag being detected separately
+
+RECOMMENDATIONS:
+---------------
+- Consider filtering duplicate detections if only one instance of each tag ID is expected
+- The detection system performs well even during motion (98.75% success rate)
+- Frame 0 in Stable.avi likely missed due to initialization timing

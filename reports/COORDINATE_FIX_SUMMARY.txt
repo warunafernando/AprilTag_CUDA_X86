@@ -1,0 +1,38 @@
+=== Coordinate Transformation Fix Summary ===
+
+PROBLEM IDENTIFIED:
+------------------
+GPU detector produces coordinates in DECIMATED SPACE (half resolution):
+- GPU: (467.90, 304.48)
+- CPU: (935.11, 608.39)
+- GPU * 2 = (935.79, 608.96) - matches CPU within 0.7 pixels!
+
+ROOT CAUSE:
+----------
+1. UpdateFitQuads() calculates corners in decimated space
+2. AdjustPixelCenters() scales them to full resolution
+3. RefineEdges() recalculates corners but produces decimated coordinates
+4. quad_decode_index() computes homography from decimated coordinates
+5. Final detection corners are wrong because homography is wrong
+
+FIX APPLIED:
+-----------
+Added coordinate scaling after RefineEdges() in QuadDecodeTask():
+- Scales coordinates from decimated to full resolution
+- Formula: (x - 0.5) * 2 + 0.5 for quad_decimate == 2.0
+- Applied before quad_decode_index() computes homography
+
+STATUS:
+------
+Fix is in place but coordinates are still in decimated space.
+This suggests either:
+1. Fix isn't being executed (refine_edges disabled?)
+2. quad_decode_index() overwrites coordinates
+3. Homography computation uses wrong coordinate space
+
+NEXT STEPS:
+----------
+1. Verify refine_edges is enabled
+2. Check if quad_update_homographies() needs coordinate scaling
+3. Consider disabling refine_edges as workaround
+4. Add debug logging to verify fix execution

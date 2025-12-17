@@ -1,0 +1,33 @@
+=== Fixed 3D Visualization Videos ===
+
+ISSUE IDENTIFIED:
+----------------
+The original videos showed 3-4 detections of tag ID 3 per frame, but there is only ONE physical tag #3 in both videos.
+
+ROOT CAUSE:
+----------
+The CUDA detector was producing multiple detections of the same tag ID, likely due to:
+1. Multiple detection paths in the algorithm
+2. Different quad candidates being decoded to the same tag ID
+3. The reconcile_detections() function not fully filtering duplicates
+
+SOLUTION:
+---------
+Created video_visualize_fixed tool that:
+- Filters duplicate detections by tag ID
+- For each tag ID, keeps only the detection with the highest decision_margin
+- This ensures only ONE detection per tag ID per frame
+
+RESULTS:
+-------
+Stable_3d_fixed.avi:
+- Before filtering: 6958 detections (avg 3.45 per frame)
+- After filtering: 2017 detections (avg 1.0 per frame)
+- Now shows only ONE tag #3 per frame
+
+Moving_3d_fixed.avi:
+- Before filtering: 7412 detections (avg 3.87 per frame)
+- After filtering: 1892 detections (avg 0.99 per frame)
+- Now shows only ONE tag #3 per frame
+
+The 3D axes visualization should now correctly show the pose of the single tag #3.

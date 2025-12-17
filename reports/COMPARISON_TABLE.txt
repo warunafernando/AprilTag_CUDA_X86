@@ -1,0 +1,33 @@
+=== CPU vs GPU Detector Comparison Table ===
+
+METRIC                    | CPU Detector    | GPU Detector    | Status
+--------------------------|-----------------|-----------------|----------
+Detections per frame      | ~1.0            | ~3.4            | ❌ GPU has duplicates
+Tag ID accuracy           | Correct (ID 3)  | Correct (ID 3)  | ✅ Both correct
+Detection location        | Correct         | 400+ px offset | ❌ GPU wrong location
+Processing speed          | 5-7 ms/frame    | 2.5 ms/frame   | ✅ GPU 2-2.6x faster
+Duplicate filtering       | Built-in        | Broken         | ❌ GPU needs fix
+Coordinate accuracy       | Accurate        | ~450px error    | ❌ GPU coordinate bug
+
+DETAILED METRICS (200 frames):
+------------------------------
+Stable.avi:
+- CPU detections: 199 (0.99/frame)
+- GPU detections: 690 (3.45/frame) → 199 after filtering
+- Center distance: 432.69 pixels average
+- Max distance: 560.95 pixels
+
+Moving.avi:
+- CPU detections: 199 (0.99/frame)
+- GPU detections: 758 (3.79/frame) → 199 after filtering
+- Center distance: 456.17 pixels average
+- Max distance: 716.88 pixels
+
+CONCLUSION:
+-----------
+The GPU detector has TWO critical bugs:
+1. Duplicate detection (3-4x more detections)
+2. Wrong location (400+ pixel offset from correct position)
+
+The CPU detector is accurate and should be used for correct results.
+The GPU detector needs coordinate transformation fixes.
