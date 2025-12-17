@@ -1,0 +1,46 @@
+=== CUDA AprilTag Standalone Project ===
+Location: /home/nav/Apriltag/StandAlone
+Total Size: ~1.9 GB
+
+COMPONENTS:
+----------
+1. Source Code (src/):
+   - apriltags_cuda/ - Main CUDA detector (Team766 fork)
+   - apriltag_cgpadwick/ - CPU library with CUDA support
+
+2. Build Artifacts:
+   - src/apriltags_cuda/build/ - Complete build with video_bench executable
+   - src/apriltag_cgpadwick/build/ - CPU library build
+
+3. Input Videos (input/):
+   - Stable.avi - Stable camera video
+   - Moving.avi - Moving camera video
+   (Currently symlinks to /home/nav/Apriltag/VPI_based/input/)
+
+4. Output Results (output/):
+   - bench_stable.csv - Stable.avi performance summary
+   - bench_moving.csv - Moving.avi performance summary
+   - bench_stable_per_frame.csv - Per-frame detection data (Stable)
+   - bench_moving_per_frame.csv - Per-frame detection data (Moving)
+   - detection_report.txt - Analysis report
+
+5. System Libraries (libs/):
+   - apriltag library installed at /usr/local/lib/libapriltag.so
+   - Headers at /usr/local/include/apriltag/
+
+PERFORMANCE:
+-----------
+- Stable.avi: 405 FPS, 99.95% detection rate
+- Moving.avi: 388 FPS, 98.75% detection rate
+
+EXECUTABLE:
+----------
+Location: src/apriltags_cuda/build/video_bench
+Size: ~4.0 MB
+Status: Built and tested
+
+LIBRARY DEPENDENCIES:
+-------------------
+- CUDA 12.2 (at /usr/local/cuda-12.2)
+- OpenCV (built as ExternalProject in apriltags_cuda)
+- apriltag CPU library (system-installed from apriltag_cgpadwick)
