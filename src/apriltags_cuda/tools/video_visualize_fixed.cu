@@ -325,7 +325,7 @@ int main(int argc, char **argv) {
   td->refine_edges = config.get_bool("detector.refine_edges", true);
   td->wp = workerpool_create(td->nthreads);
 
-  frc971::apriltag::CameraMatrix cam{cfg_fx, cfg_cx, cfg_fy, cfg_cy};
+  frc971::apriltag::CameraMatrix cam{cfg_fx, cfg_fy, cfg_cx, cfg_cy};
   frc971::apriltag::DistCoeffs dist{cfg_k1, cfg_k2, cfg_p1, cfg_p2, cfg_k3};
 
   frc971::apriltag::GpuDetector detector(width, height, td, cam, dist);

@@ -60,8 +60,8 @@ struct QuadCorners {
 
 struct CameraMatrix {
   double fx;
-  double cx;
   double fy;
+  double cx;
   double cy;
 };
 
