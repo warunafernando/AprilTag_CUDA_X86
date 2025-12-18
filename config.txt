@@ -46,3 +46,6 @@ drop_oldest: true
 queue_size: 5
 drop_oldest: true
 
+[reporting]
+show_before_filter: false
+

@@ -368,6 +368,8 @@ int main(int argc, char **argv) {
   const double cfg_p1 = config.get_double("distortion.p1", -0.003801);
   const double cfg_p2 = config.get_double("distortion.p2", 0.001113);
   const double cfg_k3 = config.get_double("distortion.k3", 0.0);
+  const bool show_before_filter =
+      config.get_bool("reporting.show_before_filter", false);
   const bool prefetch_enabled = config.get_bool("prefetching.enabled", false);
   const int cfg_prefetch_q = std::max(1, config.get_int("prefetching.queue_size", 2));
   const bool prefetch_drop_oldest = config.get_bool("prefetching.drop_oldest", true);
@@ -493,9 +495,15 @@ int main(int argc, char **argv) {
   // Thread-safe queue for GPU->CPU decode stage (2-stage pipeline)
   struct DecodeJob {
     std::vector<frc971::apriltag::QuadCorners> quads;
+    // Grayscale image used for CPU decode (GPU-produced gray buffer).
     std::vector<uint8_t> gray;
     int width;
     int height;
+    // Original input grayscale frame used only for visualization, so the user
+    // always sees the real video frame rather than any GPU-internal layout.
+    std::vector<uint8_t> display_gray;
+    int disp_width;
+    int disp_height;
     size_t frame_index;
     double fps_estimate;
   };
@@ -614,7 +622,11 @@ int main(int argc, char **argv) {
           chrono::duration<double, milli>(filt_end - filt_start).count();
 
       auto draw_start = chrono::steady_clock::now();
-      Mat gray(job.height, job.width, CV_8UC1, job.gray.data());
+      // For visualization, always use the original input grayscale frame so
+      // that the user sees a clean image (independent of how the GPU stores
+      // its internal gray buffer for detection).
+      Mat gray(job.disp_height, job.disp_width, CV_8UC1,
+               job.display_gray.data());
       Mat color_frame;
       cvtColor(gray, color_frame, COLOR_GRAY2BGR);
 
@@ -690,16 +702,22 @@ int main(int argc, char **argv) {
       current_fps = 1000.0 / avg_ms;
     }
 
-    // Build a decode job with copies of quads and the GPU-produced grayscale
-    // image (gray_image_host_) so that CPU decode sees exactly the same
-    // intensities as the original single-stage pipeline.
+    // Build a decode job with copies of:
+    //  - GPU-produced grayscale image (gray_image_host_) for CPU decode
+    //  - Original input grayscale frame for visualization
     DecodeJob job;
     job.frame_index = frame_num;
     job.width = detector.Width();
     job.height = detector.Height();
+    job.disp_width = frame_ref.cols;
+    job.disp_height = frame_ref.rows;
     job.fps_estimate = current_fps;
     job.quads = detector.FitQuads();
     detector.CopyGrayHostTo(job.gray);
+    // Copy the original input frame for display (independent of GPU layout).
+    job.display_gray.resize(static_cast<size_t>(frame_ref.cols * frame_ref.rows));
+    std::memcpy(job.display_gray.data(), frame_ref.data,
+                static_cast<size_t>(frame_ref.cols * frame_ref.rows));
 
     {
       std::lock_guard<std::mutex> lk(dq_mtx);
@@ -829,13 +847,22 @@ after_gpu_stage:
   double total_s = chrono::duration<double>(t_end - t_start).count();
   double avg_fps = frame_num / total_s;
 
-  cout << "\nCompleted processing " << frame_num << " frames in " 
+  cout << "\nCompleted processing " << frame_num << " frames in "
        << fixed << setprecision(2) << total_s << " seconds\n";
   cout << "Average processing FPS: " << avg_fps << "\n";
-  cout << "Total detections before filtering: " << total_detections_before << "\n";
-  cout << "Total detections after filtering: " << total_detections_after << "\n";
-  cout << "Average per frame: " << (total_detections_before / frame_num) 
-       << " -> " << (total_detections_after / frame_num) << "\n";
+  if (show_before_filter) {
+    cout << "Total detections before filtering: " << total_detections_before
+         << "\n";
+  }
+  cout << "Total detections after filtering: " << total_detections_after
+       << "\n";
+  if (show_before_filter) {
+    cout << "Average per frame: " << (total_detections_before / frame_num)
+         << " -> " << (total_detections_after / frame_num) << "\n";
+  } else {
+    cout << "Average per frame: " << (total_detections_after / frame_num)
+         << "\n";
+  }
   if (write_enabled) {
     cout << "Output saved to: " << output_path << endl;
   } else {
@@ -864,8 +891,11 @@ after_gpu_stage:
       cout << "  " << kv.first << " tags: " << kv.second << " frames\n";
     }
   };
-  print_hist(det_hist_before, "Frame detection histogram (before filtering):");
-  print_hist(det_hist_after,  "Frame detection histogram (after  filtering):");
+  if (show_before_filter) {
+    print_hist(det_hist_before,
+               "Frame detection histogram (before filtering):");
+  }
+  print_hist(det_hist_after, "Frame detection histogram (after  filtering):");
 
   apriltag_detector_destroy(td);
   teardown_tag_family(&tf, family.c_str());
