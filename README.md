@@ -182,6 +182,117 @@ Recent improvements to the visualization system:
 
 See `reports/VISUALIZATION_UPDATE_SUMMARY.md` for detailed information about visualization improvements.
 
+## Algorithm and Pipeline
+
+### Logical Detection Stages
+
+At a high level, the detector runs the following stages for each frame:
+
+1. **Frame acquisition (CPU, Reader thread)**  
+   - Read YUYV/BGR frame from `cv::VideoCapture`.  
+   - Push raw frame into a bounded **reader queue** for the detector thread.
+
+2. **GPU preprocessing and quad extraction (GPU, Stage 1)**  
+   Implemented in `GpuDetector::DetectGpuOnly()` in `apriltag_gpu.cu`:
+   - **Color → grayscale + decimation** (`CudaToGreyscaleAndDecimateHalide`):
+     converts the frame to grayscale and downsamples by `quad_decimate`.
+   - **Local min/max thresholding**:
+     builds a min/max pyramid and produces a binary (thresholded) image.  
+   - **Connected components (union–find)**:
+     labels foreground regions in the thresholded image.
+   - **Blob filtering and compaction**:
+     removes tiny/non-AprilTag-like components using CUDA prefix/scan+select.  
+   - **Line fit and edge peak extraction**:
+     fits lines to blob boundaries and finds strong gradient peaks that could
+     form tag edges.
+   - **Quad fitting** (`FitQuads`):
+     groups peaks into quadrilaterals and fits accurate corner locations
+     in decimated coordinates.
+   - **Coordinate adjustment** (`UpdateFitQuads` + `AdjustPixelCenters`):
+     converts quad corners into full-resolution image coordinates.
+   - The final GPU outputs are:
+     - A vector of **quad corners** (candidate tags) in full-res coordinates.
+     - The full-resolution **grayscale image** copied back to host memory.
+
+3. **CPU quad decoding and tag ID extraction (CPU, Stage 2)**  
+   Implemented in `DecodeTagsFromQuads()` in `apriltag_detect.cu`, running in
+   the dedicated **decode thread**:
+   - For each quad:
+     - Optionally **refine edges** (`RefineEdges`) in full-resolution space,
+       using the camera intrinsics and distortion coefficients.
+     - **Sample the tag grid** and run `quad_decode_index()` to recover the
+       tag family, ID, and decision margin.
+   - **Reconcile detections** (`reconcile_detections`) and build a single list
+     of `apriltag_detection_t*`.
+   - **Duplicate filtering by center**:
+     `FilterDuplicateDetectionsByCenter` keeps only the best detection per ID
+     based on decision margin and spatial distance.
+   - **Sorting**:
+     detections are sorted by quality for stable visualization and analysis.
+
+4. **Pose estimation and visualization (CPU, Decode thread)**  
+   For each surviving detection:
+   - Use OpenCV **`solvePnP`** with the camera matrix, distortion coefficients,
+     and the 4 tag corners to compute the 3D pose (rotation/translation).  
+   - Draw:
+     - **3D axes** using `cv::drawFrameAxes`.  
+     - **Tag outline** (yellow box) and **ID label** on the tag.  
+   - Aggregate per-tag pose info (`TagPoseInfo`) and render the **top-left
+     info table**:
+     - FPS
+     - Tag ID, X, Y, Z, Distance, and normalized probability (0–1).
+
+5. **Display and optional video writing (CPU, Display/Writer thread)**  
+   - Pop fully rendered frames from a bounded **draw queue**.  
+   - Call `cv::imshow` / `cv::waitKey` for live display.  
+   - Optionally write frames to `cv::VideoWriter` when `--output` is set.
+
+### Threaded Execution Pipeline (Phase 2)
+
+The current implementation runs these stages as a **2-stage detection pipeline**
+over multiple frames:
+
+- **Stage 1 (GPU)** on frame **N+1** in the **main detector thread**.  
+- **Stage 2 (CPU decode + drawing)** on frame **N** in the **decode thread**.  
+
+This creates an overlapped pipeline across four threads:
+
+```mermaid
+flowchart LR
+    subgraph Reader[Reader Thread]
+        R1[VideoCapture read] --> RQ[Reader queue]
+    end
+
+    subgraph GPU[Detector Thread (Stage 1 - GPU)]
+        G1[Pop frame from reader queue]
+        G2[DetectGpuOnly<br/>threshold + union-find + blobs + line fit + quad fit]
+        G3[Build DecodeJob<br/>(quads + gray image)]
+        G1 --> G2 --> G3 --> DQ
+    end
+
+    subgraph CPU[Decode Thread (Stage 2 - CPU)]
+        DQ[Decode queue]
+        C1[Pop DecodeJob]
+        C2[DecodeTagsFromQuads<br/>RefineEdges + quad_decode_index]
+        C3[Filter duplicates + sort]
+        C4[solvePnP + draw boxes/axes + info table]
+        C1 --> C2 --> C3 --> C4 --> WQ
+    end
+
+    subgraph Display[Display/Writer Thread]
+        WQ[Draw queue]
+        X1[imshow + optional VideoWriter.write]
+        WQ --> X1
+    end
+
+    RQ --> G1
+```
+
+This design ensures that:
+- Frame reading, GPU work, CPU decode, and display/write all run in parallel.  
+- Bounded queues between stages prevent unbounded latency growth and provide
+  clear back-pressure behavior.
+
 ## Performance
 
 ### Typical Performance (1280x1024 Grayscale Video)
@@ -200,25 +311,36 @@ Performance varies based on number of detected tags and scene complexity:
 
 ### Multi-Threaded Architecture
 
-The application uses a three-thread architecture to maximize performance:
+The application uses a **four-thread architecture** with a 2-stage detection
+pipeline:
 
 1. **Reader Thread** (Frame Prefetching)
-   - Prefetches frames from video file in parallel
-   - Maintains a bounded queue (default: 10 frames)
-   - Eliminates blocking I/O from main detection loop
-   - Thread-safe timing accumulation
+   - Prefetches frames from the video file in parallel.
+   - Maintains a bounded queue (configurable, e.g. 10 frames).
+   - Eliminates blocking I/O from the main detector thread.
+   - Contributes to `Frame read` timing in reports.
 
-2. **Main Detection Thread**
-   - Performs GPU-accelerated AprilTag detection
-   - Scales coordinates, filters duplicates
-   - Draws 3D visualization and information table
-   - Enqueues fully rendered frames for display/write
+2. **Main Detector Thread (GPU Stage 1)**
+   - Pops frames from the reader queue.  
+   - Runs `GpuDetector::DetectGpuOnly()` to execute all CUDA stages and produce
+     quad candidates + grayscale image.  
+   - Builds `DecodeJob`s and pushes them into a bounded **decode queue**.  
+   - Accumulates **CUDA-only timing** for detailed performance analysis.
 
-3. **Display/Writer Thread**
-   - Displays frames on screen (`imshow`/`waitKey`)
-   - Writes processed frames to output file (when `--output` is specified)
-   - Maintains a bounded queue (default: 5 frames)
-   - Prevents display and I/O from blocking detection
+3. **Decode Thread (CPU Stage 2)**
+   - Pops `DecodeJob`s from the decode queue.  
+   - Runs `DecodeTagsFromQuads()` to perform quad decoding and tag ID
+     extraction using a dedicated `apriltag_detector_t` + workerpool.  
+   - Scales coordinates (if needed), filters duplicates, computes tag poses
+     with `solvePnP`, and draws 3D overlays + the info table.  
+   - Enqueues fully rendered `DrawItem`s into the **draw queue**.
+
+4. **Display/Writer Thread**
+   - Pops `DrawItem`s from the draw queue.  
+   - Displays frames with `imshow`/`waitKey`.  
+   - Optionally writes frames to the output video when `--output` is provided.  
+   - Runs completely in parallel with detection and decode, so display I/O does
+     not affect detector timing.
 
 **Threading Benefits**:
 - Non-blocking frame reading (0.52-0.53 ms in parallel)
