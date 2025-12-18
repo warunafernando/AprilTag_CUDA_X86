@@ -259,27 +259,27 @@ This creates an overlapped pipeline across four threads:
 
 ```mermaid
 flowchart LR
-    subgraph Reader[Reader Thread]
+    subgraph Reader
         R1[VideoCapture read] --> RQ[Reader queue]
     end
 
-    subgraph GPU[Detector Thread (Stage 1 - GPU)]
+    subgraph Detector
         G1[Pop frame from reader queue]
-        G2[DetectGpuOnly<br/>threshold + union-find + blobs + line fit + quad fit]
-        G3[Build DecodeJob<br/>(quads + gray image)]
+        G2[GPU Stage 1: DetectGpuOnly<br/>threshold + union-find + blobs + line fit + quad fit]
+        G3[Build DecodeJob (quads + gray image)]
         G1 --> G2 --> G3 --> DQ
     end
 
-    subgraph CPU[Decode Thread (Stage 2 - CPU)]
+    subgraph Decode
         DQ[Decode queue]
         C1[Pop DecodeJob]
-        C2[DecodeTagsFromQuads<br/>RefineEdges + quad_decode_index]
+        C2[CPU Stage 2: DecodeTagsFromQuads<br/>RefineEdges + quad_decode_index]
         C3[Filter duplicates + sort]
         C4[solvePnP + draw boxes/axes + info table]
         C1 --> C2 --> C3 --> C4 --> WQ
     end
 
-    subgraph Display[Display/Writer Thread]
+    subgraph Display
         WQ[Draw queue]
         X1[imshow + optional VideoWriter.write]
         WQ --> X1
