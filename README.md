@@ -265,17 +265,17 @@ flowchart LR
 
     subgraph Detector
         G1[Pop frame from reader queue]
-        G2[GPU Stage 1: DetectGpuOnly<br/>threshold + union-find + blobs + line fit + quad fit]
-        G3[Build DecodeJob (quads + gray image)]
+        G2[GPU Stage 1: DetectGpuOnly - threshold, union-find, blobs, line fit, quad fit]
+        G3[Build DecodeJob with quads and gray image]
         G1 --> G2 --> G3 --> DQ
     end
 
     subgraph Decode
         DQ[Decode queue]
         C1[Pop DecodeJob]
-        C2[CPU Stage 2: DecodeTagsFromQuads<br/>RefineEdges + quad_decode_index]
-        C3[Filter duplicates + sort]
-        C4[solvePnP + draw boxes/axes + info table]
+        C2[CPU Stage 2: DecodeTagsFromQuads, RefineEdges, quad_decode_index]
+        C3[Filter duplicates and sort]
+        C4[solvePnP and draw boxes, axes, info table]
         C1 --> C2 --> C3 --> C4 --> WQ
     end
 
