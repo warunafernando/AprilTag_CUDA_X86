@@ -88,9 +88,22 @@ public:
   // Detects april tags in the provided image.
   void Detect(const uint8_t *image);
 
+  // Runs only the GPU portion of detection (image upload, thresholding,
+  // union-find, quad fitting, and coordinate adjustment) without performing
+  // CPU tag decoding. This is a building block for future 2-stage pipelines.
+  void DetectGpuOnly(const uint8_t *image);
+
   const std::vector<QuadCorners> &FitQuads() const;
 
   const zarray_t *Detections() const { return detections_; }
+
+  // Copy the host-side grayscale image used for CPU decode into the provided
+  // buffer. The buffer is resized to width_ * height_.
+  void CopyGrayHostTo(std::vector<uint8_t> &out) const;
+
+  // Image size helpers.
+  int Width() const { return static_cast<int>(width_); }
+  int Height() const { return static_cast<int>(height_); }
 
   void ReinitializeDetections();
   

@@ -594,7 +594,7 @@ void RefineEdges(apriltag_detector_t *td, image_u8_t *im_orig,
   }
 }
 
-void GpuDetector::QuadDecodeTask(void *_u) {
+static void QuadDecodeTaskImpl(void *_u) {
   QuadDecodeTaskStruct *task = reinterpret_cast<QuadDecodeTaskStruct *>(_u);
   apriltag_detector_t *td = task->td;
   image_u8_t *im = task->im;
@@ -646,59 +646,86 @@ void GpuDetector::QuadDecodeTask(void *_u) {
   }
 }
 
-void GpuDetector::DecodeTags() {
-  // Optional debug: compare CPU vs GPU quad sampling for a few quads (disabled stub).
-  DebugCompareCpuGpuSamples(5);
+void GpuDetector::QuadDecodeTask(void *_u) {
+  QuadDecodeTaskImpl(_u);
+}
 
+// Helper to decode tags from a set of GPU-produced quads and a grayscale image.
+// This is used by GpuDetector::DecodeTags and can also be reused by external
+// 2-stage pipelines that run CPU decode in a separate thread.
+void DecodeTagsFromQuads(const std::vector<QuadCorners> &quad_corners,
+                                const uint8_t *gray_buf,
+                                int width, int height,
+                                apriltag_detector_t *td,
+                                const CameraMatrix &camera_matrix,
+                                const DistCoeffs &distortion_coefficients,
+                                zarray_t *detections,
+                                zarray_t *poly0,
+                                zarray_t *poly1) {
   size_t chunksize =
-      1 + quad_corners_host_.size() /
-              (APRILTAG_TASKS_PER_THREAD_TARGET * tag_detector_->nthreads);
+      1 + quad_corners.size() /
+              (APRILTAG_TASKS_PER_THREAD_TARGET * td->nthreads);
 
   std::vector<QuadDecodeTaskStruct> tasks(
-      (quad_corners_host_.size() / chunksize + 1));
+      (quad_corners.size() / chunksize + 1));
 
-  for (int i = 0; i < zarray_size(detections_); ++i) {
+  // Clear any existing detections.
+  for (int i = 0; i < zarray_size(detections); ++i) {
     apriltag_detection_t *det;
-    zarray_get(detections_, i, &det);
+    zarray_get(detections, i, &det);
     apriltag_detection_destroy(det);
   }
-
-  zarray_truncate(detections_, 0);
+  zarray_truncate(detections, 0);
 
   image_u8_t im_orig{
-      .width = static_cast<int32_t>(width_),
-      .height = static_cast<int32_t>(height_),
-      .stride = static_cast<int32_t>(width_),
-      .buf = gray_image_host_.get(),
+      .width = static_cast<int32_t>(width),
+      .height = static_cast<int32_t>(height),
+      .stride = static_cast<int32_t>(width),
+      .buf = const_cast<uint8_t *>(gray_buf),
   };
 
   int ntasks = 0;
-  for (size_t i = 0; i < quad_corners_host_.size(); i += chunksize) {
-    tasks[ntasks].i0 = i;
-    tasks[ntasks].i1 = std::min(quad_corners_host_.size(), i + chunksize);
-    tasks[ntasks].quads = quad_corners_host_.data();
-    tasks[ntasks].td = tag_detector_;
+  for (size_t i = 0; i < quad_corners.size(); i += chunksize) {
+    tasks[ntasks].i0 = static_cast<int>(i);
+    tasks[ntasks].i1 =
+        static_cast<int>(std::min(quad_corners.size(), i + chunksize));
+    tasks[ntasks].quads = const_cast<QuadCorners *>(quad_corners.data());
+    tasks[ntasks].td = td;
     tasks[ntasks].im = &im_orig;
-    tasks[ntasks].detections = detections_;
-    tasks[ntasks].camera_matrix = &camera_matrix_;
-    tasks[ntasks].distortion_coefficients = &distortion_coefficients_;
-
+    tasks[ntasks].detections = detections;
+    tasks[ntasks].camera_matrix = const_cast<CameraMatrix *>(&camera_matrix);
+    tasks[ntasks].distortion_coefficients =
+        const_cast<DistCoeffs *>(&distortion_coefficients);
     tasks[ntasks].im_samples = nullptr;
 
-    workerpool_add_task(tag_detector_->wp, QuadDecodeTask, &tasks[ntasks]);
+    workerpool_add_task(td->wp, QuadDecodeTaskImpl, &tasks[ntasks]);
     ntasks++;
   }
 
-  workerpool_run(tag_detector_->wp);
+  workerpool_run(td->wp);
 
-  reconcile_detections(detections_, poly0_, poly1_);
-  
-  // Additional filtering: remove duplicates based on center distance
-  // This fixes the issue where GPU produces multiple detections of the same tag
-  // that are far apart (400+ pixels) and don't overlap, so reconcile_detections misses them
-  FilterDuplicateDetectionsByCenter(detections_);
+  reconcile_detections(detections, poly0, poly1);
 
-  zarray_sort(detections_, detection_compare_function);
+  // Additional filtering: remove duplicates based on center distance.
+  FilterDuplicateDetectionsByCenter(detections);
+
+  zarray_sort(detections, detection_compare_function);
+}
+
+void GpuDetector::DecodeTags() {
+  // Optional debug: compare CPU vs GPU quad sampling for a few quads.
+  DebugCompareCpuGpuSamples(5);
+
+  DecodeTagsFromQuads(quad_corners_host_,
+                      gray_image_host_.get(),
+                      static_cast<int>(width_),
+                      static_cast<int>(height_),
+                      tag_detector_,
+                      camera_matrix_,
+                      distortion_coefficients_,
+                      detections_,
+                      poly0_,
+                      poly1_);
 }
 
 namespace {

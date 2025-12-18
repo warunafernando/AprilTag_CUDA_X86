@@ -11,6 +11,7 @@
 #include <cub/iterator/discard_output_iterator.cuh>
 #include <cub/iterator/transform_input_iterator.cuh>
 #include <vector>
+#include <cstring>
 
 #include "apriltag_gpu.h"
 #include "g2d.h"
@@ -222,6 +223,14 @@ GpuDetector::~GpuDetector() {
   zarray_destroy(detections_);
   zarray_destroy(poly1_);
   zarray_destroy(poly0_);
+}
+
+void GpuDetector::CopyGrayHostTo(std::vector<uint8_t> &out) const {
+  const size_t sz = width_ * height_;
+  out.resize(sz);
+  if (sz > 0) {
+    std::memcpy(out.data(), gray_image_host_.get(), sz);
+  }
 }
 
 void GpuDetector::ReinitializeDetections() {
@@ -1232,6 +1241,342 @@ void GpuDetector::Detect(const uint8_t *image) {
   }
 
   first_ = false;
+}
+
+void GpuDetector::DetectGpuOnly(const uint8_t *image) {
+  // GPU-only version of Detect(): runs all CUDA stages and updates quad_corners
+  // but does not perform CPU tag decoding or timing accumulation.
+
+  start_.Record(&stream_);
+  color_image_device_.MemcpyAsyncFrom(image, &stream_);
+  after_image_memcpy_to_device_.Record(&stream_);
+
+  // Threshold the image.
+  CudaToGreyscaleAndDecimateHalide(
+      color_image_device_.get(), gray_image_device_.get(),
+      decimated_image_device_.get(), unfiltered_minmax_image_device_.get(),
+      minmax_image_device_.get(), thresholded_image_device_.get(), width_,
+      height_, tag_detector_->qtp.min_white_black_diff, &stream_);
+  after_threshold_.Record(&stream_);
+
+  gray_image_device_.MemcpyAsyncTo(&gray_image_host_, &stream_);
+  after_memcpy_gray_.Record(&stream_);
+
+  union_markers_size_device_.MemsetAsync(0u, &stream_);
+  after_memset_.Record(&stream_);
+
+  // Unionfind the image.
+  LabelImage(ToGpuImage(thresholded_image_device_),
+             ToGpuImage(union_markers_device_),
+             ToGpuImage(union_markers_size_device_), stream_.get());
+  after_unionfinding_.Record(&stream_);
+
+  CHECK((width_ % 8) == 0);
+  CHECK((height_ % 8) == 0);
+
+  size_t decimated_width = width_ / 2;
+  size_t decimated_height = height_ / 2;
+
+  // Compute the unfiltered list of blob pairs and points.
+  {
+    constexpr size_t kBlockWidth = 32;
+    constexpr size_t kBlockHeight = 16;
+    dim3 threads(kBlockWidth, kBlockHeight, 1);
+    dim3 blocks((decimated_width + threads.x - 3) / (threads.x - 2),
+                (decimated_height + threads.y - 2) / (threads.y - 1), 1);
+
+    CHECK_LT(width_ * height_, static_cast<size_t>(1 << 22));
+
+    BlobDiff<kBlockWidth, kBlockHeight><<<blocks, threads, 0, stream_.get()>>>(
+        thresholded_image_device_.get(), union_markers_device_.get(),
+        union_markers_size_device_.get(), union_marker_pair_device_.get(),
+        decimated_width, decimated_height);
+    MaybeCheckAndSynchronize("BlobDiff");
+  }
+
+  after_diff_.Record(&stream_);
+
+  {
+    size_t temp_storage_bytes =
+        temp_storage_compressed_union_marker_pair_device_.size();
+    NonZero nz;
+    CHECK_CUDA(cub::DeviceSelect::If(
+        temp_storage_compressed_union_marker_pair_device_.get(),
+        temp_storage_bytes, union_marker_pair_device_.get(),
+        compressed_union_marker_pair_device_.get(),
+        num_compressed_union_marker_pair_device_.get(),
+        union_marker_pair_device_.size(), nz, stream_.get()));
+    MaybeCheckAndSynchronize("cub::DeviceSelect::If");
+  }
+
+  after_compact_.Record(&stream_);
+
+  int num_compressed_union_marker_pair_host;
+  {
+    num_compressed_union_marker_pair_device_.MemcpyTo(
+        &num_compressed_union_marker_pair_host);
+    CHECK_LT(static_cast<size_t>(num_compressed_union_marker_pair_host),
+             union_marker_pair_device_.size());
+
+    size_t temp_storage_bytes = radix_sort_tmpstorage_device_.size();
+    QuadBoundaryPointDecomposer decomposer;
+    CHECK_CUDA(cub::DeviceRadixSort::SortKeys(
+        radix_sort_tmpstorage_device_.get(), temp_storage_bytes,
+        compressed_union_marker_pair_device_.get(),
+        sorted_union_marker_pair_device_.get(),
+        num_compressed_union_marker_pair_host, decomposer,
+        QuadBoundaryPoint::kRepEndBit, QuadBoundaryPoint::kBitsInKey,
+        stream_.get()));
+    MaybeCheckAndSynchronize("cub::DeviceRadixSort::SortKeys");
+  }
+
+  after_sort_.Record(&stream_);
+
+  size_t num_quads_host = 0;
+  {
+    cub::ArgIndexInputIterator<QuadBoundaryPoint *> value_index_input_iterator(
+        sorted_union_marker_pair_device_.get());
+    TransformQuadBoundaryPointToMinMaxExtents min_max;
+    cub::TransformInputIterator<MinMaxExtents,
+                                TransformQuadBoundaryPointToMinMaxExtents,
+                                cub::ArgIndexInputIterator<QuadBoundaryPoint *>>
+        value_input_iterator(value_index_input_iterator, min_max);
+
+    cub::DiscardOutputIterator<uint64_t> key_discard_iterator;
+
+    MaskRep01 mask;
+    cub::TransformInputIterator<uint64_t, MaskRep01, QuadBoundaryPoint *>
+        key_input_iterator(sorted_union_marker_pair_device_.get(), mask);
+
+    QuadBoundaryPointExtents reduce;
+
+    size_t temp_storage_bytes =
+        temp_storage_bounds_reduce_by_key_device_.size();
+    cub::DeviceReduce::ReduceByKey(
+        temp_storage_bounds_reduce_by_key_device_.get(), temp_storage_bytes,
+        key_input_iterator, key_discard_iterator, value_input_iterator,
+        extents_device_.get(), num_quads_device_.get(), reduce,
+        num_compressed_union_marker_pair_host, stream_.get());
+    MaybeCheckAndSynchronize("cub::DeviceReduce::ReduceByKey");
+
+    num_quads_device_.MemcpyTo(&num_quads_host);
+  }
+
+  const size_t max_april_tag_perimeter = 2 * (width_ + height_);
+
+  {
+    cub::ArgIndexInputIterator<MinMaxExtents *> value_index_input_iterator(
+        extents_device_.get());
+    TransformZeroFilteredBlobSizes rewrite(
+        min_tag_width_, reversed_border_, normal_border_,
+        tag_detector_->qtp.min_cluster_pixels, max_april_tag_perimeter);
+    cub::TransformInputIterator<cub::KeyValuePair<long, MinMaxExtents>,
+                                TransformZeroFilteredBlobSizes,
+                                cub::ArgIndexInputIterator<MinMaxExtents *>>
+        input_iterator(value_index_input_iterator, rewrite);
+
+    SumPoints sum_points;
+
+    size_t temp_storage_bytes =
+        temp_storage_selected_extents_scan_device_.size();
+    CHECK_CUDA(cub::DeviceScan::InclusiveScan(
+        temp_storage_selected_extents_scan_device_.get(), temp_storage_bytes,
+        input_iterator, selected_extents_device_.get(), sum_points,
+        num_quads_host));
+    MaybeCheckAndSynchronize("cub::DeviceScan::InclusiveScan");
+  }
+
+  after_transform_extents_.Record(&stream_);
+
+  int num_selected_blobs_host;
+  {
+    cub::ArgIndexInputIterator<QuadBoundaryPoint *> value_index_input_iterator(
+        sorted_union_marker_pair_device_.get());
+    RewriteToIndexPoint rewrite(extents_device_.get(), num_quads_host);
+
+    cub::TransformInputIterator<IndexPoint, RewriteToIndexPoint,
+                                cub::ArgIndexInputIterator<QuadBoundaryPoint *>>
+        input_iterator(value_index_input_iterator, rewrite);
+
+    AddThetaToIndexPoint add_theta(extents_device_.get(), num_quads_host);
+
+    TransformOutputIterator<IndexPoint, IndexPoint, AddThetaToIndexPoint>
+        output_iterator(selected_blobs_device_.get(), add_theta);
+
+    NonzeroBlobs select_blobs(selected_extents_device_.get());
+
+    size_t temp_storage_bytes =
+        temp_storage_compressed_filtered_blobs_device_.size();
+
+    CHECK_CUDA(cub::DeviceSelect::If(
+        temp_storage_compressed_filtered_blobs_device_.get(),
+        temp_storage_bytes, input_iterator, output_iterator,
+        num_selected_blobs_device_.get(), num_compressed_union_marker_pair_host,
+        select_blobs, stream_.get()));
+
+    MaybeCheckAndSynchronize("cub::DeviceSelect::If");
+
+    num_selected_blobs_device_.MemcpyAsyncTo(&num_selected_blobs_host,
+                                             &stream_);
+    after_filter_.Record(&stream_);
+    after_filter_.Synchronize();
+  }
+
+  {
+    size_t temp_storage_bytes = radix_sort_tmpstorage_device_.size();
+    QuadIndexPointDecomposer decomposer;
+
+    CHECK_CUDA(cub::DeviceRadixSort::SortKeys(
+        radix_sort_tmpstorage_device_.get(), temp_storage_bytes,
+        selected_blobs_device_.get(), sorted_selected_blobs_device_.get(),
+        num_selected_blobs_host, decomposer, IndexPoint::kRepEndBit,
+        IndexPoint::kBitsInKey, stream_.get()));
+
+    MaybeCheckAndSynchronize("cub::DeviceRadixSort::SortKeys");
+  }
+
+  after_filtered_sort_.Record(&stream_);
+
+  {
+    TransformLineFitPoint rewrite(decimated_image_device_.get(), width_ / 2,
+                                  height_ / 2);
+    cub::TransformInputIterator<LineFitPoint, TransformLineFitPoint,
+                                IndexPoint *>
+        input_iterator(sorted_selected_blobs_device_.get(), rewrite);
+
+    MaskBlobIndex mask;
+    cub::TransformInputIterator<uint32_t, MaskBlobIndex, IndexPoint *>
+        key_iterator(sorted_selected_blobs_device_.get(), mask);
+
+    SumLineFitPoints sum_points;
+
+    size_t temp_storage_bytes = temp_storage_line_fit_scan_device_.size();
+
+    CHECK_CUDA(cub::DeviceScan::InclusiveScanByKey(
+        temp_storage_line_fit_scan_device_.get(), temp_storage_bytes,
+        key_iterator, input_iterator, line_fit_points_device_.get(), sum_points,
+        num_selected_blobs_host));
+
+    MaybeCheckAndSynchronize("cub::DeviceScan::InclusiveScanByKey");
+  }
+
+  after_line_fit_.Record(&stream_);
+
+  {
+    FitLines(line_fit_points_device_.get(), num_selected_blobs_host,
+             selected_extents_device_.get(), num_quads_host, errs_device_.get(),
+             filtered_errs_device_.get(), filtered_is_local_peak_device_.get(),
+             &stream_);
+  }
+
+  after_line_filter_.Record(&stream_);
+
+  int num_compressed_peaks_host;
+  {
+    size_t temp_storage_bytes =
+        temp_storage_compressed_union_marker_pair_device_.size();
+    ValidPeaks peak_filter;
+    CHECK_CUDA(cub::DeviceSelect::If(
+        temp_storage_compressed_union_marker_pair_device_.get(),
+        temp_storage_bytes, filtered_is_local_peak_device_.get(),
+        compressed_peaks_device_.get(), num_compressed_peaks_device_.get(),
+        num_selected_blobs_host, peak_filter, stream_.get()));
+
+    after_peak_compression_.Record(&stream_);
+    MaybeCheckAndSynchronize("cub::DeviceSelect::If");
+
+    num_compressed_peaks_device_.MemcpyAsyncTo(&num_compressed_peaks_host,
+                                               &stream_);
+    after_peak_count_memcpy_.Record(&stream_);
+    after_peak_count_memcpy_.Synchronize();
+  }
+
+  {
+    size_t temp_storage_bytes = radix_sort_tmpstorage_device_.size();
+    PeakDecomposer decomposer;
+
+    CHECK_CUDA(cub::DeviceRadixSort::SortKeys(
+        radix_sort_tmpstorage_device_.get(), temp_storage_bytes,
+        compressed_peaks_device_.get(), sorted_compressed_peaks_device_.get(),
+        num_compressed_peaks_host, decomposer, 0, PeakDecomposer::kBitsInKey,
+        stream_.get()));
+
+    MaybeCheckAndSynchronize("cub::DeviceRadixSort::SortKeys");
+  }
+
+  after_peak_sort_.Record(&stream_);
+
+  int num_quad_peaked_quads_host;
+  {
+    cub::ArgIndexInputIterator<Peak *> value_index_input_iterator(
+        sorted_compressed_peaks_device_.get());
+    TransformToPeakExtents transform_extents;
+    cub::TransformInputIterator<PeakExtents, TransformToPeakExtents,
+                                cub::ArgIndexInputIterator<Peak *>>
+        value_input_iterator(value_index_input_iterator, transform_extents);
+
+    cub::DiscardOutputIterator<uint32_t> key_discard_iterator;
+
+    MaskPeakExtentsByBlobId mask;
+    cub::TransformInputIterator<uint32_t, MaskPeakExtentsByBlobId, Peak *>
+        key_input_iterator(sorted_compressed_peaks_device_.get(), mask);
+
+    MergePeakExtents reduce;
+
+    size_t temp_storage_bytes =
+        temp_storage_bounds_reduce_by_key_device_.size();
+    cub::DeviceReduce::ReduceByKey(
+        temp_storage_bounds_reduce_by_key_device_.get(), temp_storage_bytes,
+        key_input_iterator, key_discard_iterator, value_input_iterator,
+        peak_extents_device_.get(), num_quad_peaked_quads_device_.get(), reduce,
+        num_compressed_peaks_host, stream_.get());
+    MaybeCheckAndSynchronize("cub::DeviceReduce::ReduceByKey");
+
+    after_filtered_peak_reduce_.Record(&stream_);
+
+    num_quad_peaked_quads_device_.MemcpyAsyncTo(&num_quad_peaked_quads_host,
+                                                &stream_);
+    MaybeCheckAndSynchronize("num_quad_peaked_quads_device_.MemcpyTo");
+
+    after_filtered_peak_host_memcpy_.Record(&stream_);
+    after_filtered_peak_host_memcpy_.Synchronize();
+  }
+
+  {
+    apriltag::FitQuads(
+        sorted_compressed_peaks_device_.get(), num_compressed_peaks_host,
+        peak_extents_device_.get(), num_quad_peaked_quads_host,
+        line_fit_points_device_.get(), tag_detector_->qtp.max_nmaxima,
+        selected_extents_device_.get(), tag_detector_->qtp.max_line_fit_mse,
+        tag_detector_->qtp.cos_critical_rad, fit_quads_device_.get(), &stream_);
+    MaybeCheckAndSynchronize("FitQuads");
+  }
+
+  after_quad_fit_.Record(&stream_);
+
+  {
+    fit_quads_host_.resize(num_quad_peaked_quads_host);
+    fit_quads_device_.MemcpyAsyncTo(fit_quads_host_.data(),
+                                    num_quad_peaked_quads_host, &stream_);
+    after_quad_fit_memcpy_.Record(&stream_);
+    after_quad_fit_memcpy_.Synchronize();
+  }
+
+  UpdateFitQuads();
+  AdjustPixelCenters();
+  SampleQuadsOnGpuDebug();
+
+   // Accumulate pure CUDA time for this GPU-only pass (from start_ to the end
+   // of quad fitting and host memcpy). This mirrors the CUDA timing used in
+   // the monolithic Detect() path, but without any CPU decode component.
+   if (!first_) {
+     CudaEvent after_gpu;
+     after_gpu.Record(&stream_);
+     after_gpu.Synchronize();
+     auto cuda_time_ns = after_gpu.ElapsedTime(start_);
+     cuda_operations_duration_ += cuda_time_ns;
+   }
+   first_ = false;
 }
 
 }  // namespace frc971::apriltag

@@ -28,6 +28,7 @@ extern "C" {
 #include "apriltag.h"
 #include "apriltag_pose.h"
 }
+#include "g2d.h"
 
 using namespace std;
 using namespace cv;
@@ -40,6 +41,19 @@ struct FrameItem {
   Mat gray;
   size_t idx;
 };
+
+// External CPU decode helper from apriltag_detect.cu, reused here for the
+// 2-stage pipeline (GPU quads -> CPU decode).
+namespace frc971::apriltag {
+void DecodeTagsFromQuads(const std::vector<QuadCorners> &quad_corners,
+                         const uint8_t *gray_buf, int width, int height,
+                         apriltag_detector_t *td,
+                         const CameraMatrix &camera_matrix,
+                         const DistCoeffs &distortion_coefficients,
+                         zarray_t *detections,
+                         zarray_t *poly0,
+                         zarray_t *poly1);
+}  // namespace frc971::apriltag
 
 struct TagPoseInfo {
   int id;
@@ -462,7 +476,7 @@ int main(int argc, char **argv) {
   cout << "Resolution: " << width << "x" << height << " @ " << fps << " FPS\n";
   cout << "Min distance for duplicate filtering: " << min_distance << " pixels\n";
 
-  // Thread-safe queue for draw/display/write
+  // Thread-safe queue for draw/display/write (final rendered frames)
   const size_t writer_queue_size = static_cast<size_t>(cfg_writer_q);
   std::deque<DrawItem> draw_queue;
   std::mutex draw_mtx;
@@ -475,6 +489,24 @@ int main(int argc, char **argv) {
   std::mutex fq_mtx;
   std::condition_variable fq_cv;
   bool reader_done = false;
+
+  // Thread-safe queue for GPU->CPU decode stage (2-stage pipeline)
+  struct DecodeJob {
+    std::vector<frc971::apriltag::QuadCorners> quads;
+    std::vector<uint8_t> gray;
+    int width;
+    int height;
+    size_t frame_index;
+    double fps_estimate;
+  };
+  const size_t decode_queue_size =
+      static_cast<size_t>(std::max(1, config.get_int("decode.queue_size", 4)));
+  const bool decode_drop_oldest =
+      config.get_bool("decode.drop_oldest", true);
+  std::deque<DecodeJob> decode_queue;
+  std::mutex dq_mtx;
+  std::condition_variable dq_cv;
+  bool decode_done = false;
 
   // Display/write thread: owns imshow/waitKey and optionally VideoWriter
   std::thread display_thread([&]() {
@@ -511,21 +543,136 @@ int main(int argc, char **argv) {
     }
   });
 
+  // Decode + draw thread: consumes GPU-produced quads/gray images and produces
+  // fully rendered color frames, then enqueues them to the display/write
+  // thread. This is Stage 2 of the 2-stage pipeline.
+  std::thread decode_thread([&]() {
+    // Local APRILTAG detector and family for CPU decode stage.
+    apriltag_family_t *tf_cpu = nullptr;
+    setup_tag_family(&tf_cpu, family.c_str());
+    apriltag_detector_t *td_cpu = apriltag_detector_create();
+    apriltag_detector_add_family(td_cpu, tf_cpu);
+    td_cpu->quad_decimate = td->quad_decimate;
+    td_cpu->quad_sigma = td->quad_sigma;
+    td_cpu->refine_edges = td->refine_edges;
+    td_cpu->debug = td->debug;
+    td_cpu->nthreads = td->nthreads;
+    td_cpu->wp = workerpool_create(td_cpu->nthreads);
+
+    zarray_t *poly0 = g2d_polygon_create_zeros(4);
+    zarray_t *poly1 = g2d_polygon_create_zeros(4);
+    zarray_t *detections = zarray_create(sizeof(apriltag_detection_t *));
+
+    while (true) {
+      DecodeJob job;
+      {
+        std::unique_lock<std::mutex> lk(dq_mtx);
+        dq_cv.wait(lk, [&]() { return decode_done || !decode_queue.empty(); });
+        if (decode_queue.empty()) {
+          if (decode_done) break;
+          else continue;
+        }
+        job = std::move(decode_queue.front());
+        decode_queue.pop_front();
+      }
+
+      auto cpu_start = chrono::steady_clock::now();
+      frc971::apriltag::DecodeTagsFromQuads(
+          job.quads, job.gray.data(), job.width, job.height,
+          td_cpu, cam, dist, detections, poly0, poly1);
+      auto cpu_end = chrono::steady_clock::now();
+      acc_cpu_decode_ms +=
+          chrono::duration<double, milli>(cpu_end - cpu_start).count();
+
+      const zarray_t *detections_const = detections;
+      int det_before = zarray_size(detections_const);
+      total_detections_before += det_before;
+      det_hist_before[det_before]++;
+
+      auto scale_start = chrono::steady_clock::now();
+      const double gpu_decimate = td->quad_decimate;
+      if (gpu_decimate > 1.0) {
+        for (int i = 0; i < zarray_size(detections_const); i++) {
+          apriltag_detection_t *det;
+          zarray_get(const_cast<zarray_t *>(detections_const), i, &det);
+          scale_detection_coordinates(det, gpu_decimate);
+        }
+      }
+      auto scale_end = chrono::steady_clock::now();
+      acc_scale_ms +=
+          chrono::duration<double, milli>(scale_end - scale_start).count();
+
+      auto filt_start = chrono::steady_clock::now();
+      std::vector<apriltag_detection_t *> filtered =
+          filter_duplicates(detections_const, job.width, job.height,
+                            min_distance);
+      int det_after = static_cast<int>(filtered.size());
+      total_detections_after += det_after;
+      det_hist_after[det_after]++;
+      auto filt_end = chrono::steady_clock::now();
+      acc_filter_ms +=
+          chrono::duration<double, milli>(filt_end - filt_start).count();
+
+      auto draw_start = chrono::steady_clock::now();
+      Mat gray(job.height, job.width, CV_8UC1, job.gray.data());
+      Mat color_frame;
+      cvtColor(gray, color_frame, COLOR_GRAY2BGR);
+
+      vector<TagPoseInfo> tag_poses;
+      for (auto *det : filtered) {
+        TagPoseInfo pose_info;
+        if (draw_3d_axes(color_frame, det, cam, dist, tag_size, pose_info)) {
+          tag_poses.push_back(pose_info);
+        }
+      }
+
+      draw_info_table(color_frame, tag_poses, job.fps_estimate);
+      auto draw_end = chrono::steady_clock::now();
+      acc_draw_ms +=
+          chrono::duration<double, milli>(draw_end - draw_start).count();
+
+      {
+        std::lock_guard<std::mutex> lk(draw_mtx);
+        if (draw_queue.size() >= writer_queue_size) {
+          if (writer_drop_oldest && !draw_queue.empty()) {
+            draw_queue.pop_front();
+          } else {
+            continue;  // drop this rendered frame
+          }
+        }
+        DrawItem item;
+        item.color = color_frame.clone();
+        draw_queue.push_back(std::move(item));
+      }
+      draw_cv.notify_one();
+    }
+
+    // Cleanup CPU decode resources.
+    for (int i = 0; i < zarray_size(detections); ++i) {
+      apriltag_detection_t *det;
+      zarray_get(detections, i, &det);
+      apriltag_detection_destroy(det);
+    }
+    zarray_destroy(detections);
+    zarray_destroy(poly0);
+    zarray_destroy(poly1);
+    apriltag_detector_destroy(td_cpu);
+    teardown_tag_family(&tf_cpu, family.c_str());
+  });
+
   auto process_frame = [&](const Mat &frame_ref) {
-    // Fastest path: pass grayscale directly to detector.
+    // Stage 1: GPU-only detection on this frame.
     auto f_start = chrono::steady_clock::now();
-    detector.Detect(frame_ref.data);
+    detector.DetectGpuOnly(frame_ref.data);
     auto f_end = chrono::steady_clock::now();
     double frame_ms = chrono::duration<double, milli>(f_end - f_start).count();
     frame_times.push_back(frame_ms);
     acc_detect_ms += frame_ms;
-    // CUDA vs CPU decode split
+
+    // Approximate CUDA time using the detector's CUDA accumulator.
     double cur_cuda = detector.GetCudaOperationsDurationMs();
-    double cur_cpu  = detector.GetCpuDecodeDurationMs();
     acc_cuda_ms += (cur_cuda - prev_cuda_total);
-    acc_cpu_decode_ms += (cur_cpu - prev_cpu_total);
     prev_cuda_total = cur_cuda;
-    prev_cpu_total = cur_cpu;
     
     // Calculate current FPS (rolling average)
     double current_fps = 0.0;
@@ -543,76 +690,36 @@ int main(int argc, char **argv) {
       current_fps = 1000.0 / avg_ms;
     }
 
-    // Get detections
-    const zarray_t *detections = detector.Detections();
-    int det_before = zarray_size(detections);
-    total_detections_before += det_before;
-    det_hist_before[det_before]++;
-    
-    auto scale_start = chrono::steady_clock::now();
-    // IMPORTANT: Scale GPU detector coordinates from decimated to full resolution
-    const double gpu_decimate = td->quad_decimate;
-    if (gpu_decimate > 1.0) {
-      for (int i = 0; i < zarray_size(detections); i++) {
-        apriltag_detection_t *det;
-        zarray_get(const_cast<zarray_t *>(detections), i, &det);
-        scale_detection_coordinates(det, gpu_decimate);
-      }
-    }
-    auto scale_end = chrono::steady_clock::now();
-    acc_scale_ms += chrono::duration<double, milli>(scale_end - scale_start).count();
-    
-    auto filt_start = chrono::steady_clock::now();
-    // Filter duplicates (also filters out invalid coordinates)
-    vector<apriltag_detection_t*> filtered = filter_duplicates(detections, width, height, min_distance);
-    int det_after = static_cast<int>(filtered.size());
-    total_detections_after += det_after;
-    det_hist_after[det_after]++;
-    auto filt_end = chrono::steady_clock::now();
-    acc_filter_ms += chrono::duration<double, milli>(filt_end - filt_start).count();
-    
-    auto draw_start = chrono::steady_clock::now();
-    // Draw in main thread (for display) and optionally enqueue for writing
-    Mat color_frame;
-    cvtColor(frame_ref, color_frame, COLOR_GRAY2BGR);
-    
-    // Collect tag pose information and draw axes
-    vector<TagPoseInfo> tag_poses;
-    for (auto *det : filtered) {
-      TagPoseInfo pose_info;
-      if (draw_3d_axes(color_frame, det, cam, dist, tag_size, pose_info)) {
-        // Only add tags with valid pose estimation
-        tag_poses.push_back(pose_info);
-      }
-    }
-    
-    // Draw information table in top-right corner
-    draw_info_table(color_frame, tag_poses, current_fps);
-    auto draw_end = chrono::steady_clock::now();
-    acc_draw_ms += chrono::duration<double, milli>(draw_end - draw_start).count();
+    // Build a decode job with copies of quads and the GPU-produced grayscale
+    // image (gray_image_host_) so that CPU decode sees exactly the same
+    // intensities as the original single-stage pipeline.
+    DecodeJob job;
+    job.frame_index = frame_num;
+    job.width = detector.Width();
+    job.height = detector.Height();
+    job.fps_estimate = current_fps;
+    job.quads = detector.FitQuads();
+    detector.CopyGrayHostTo(job.gray);
 
-    // Enqueue frame for display (and optional writing) without blocking detector
     {
-      std::lock_guard<std::mutex> lk(draw_mtx);
-      if (draw_queue.size() >= writer_queue_size) {
-        if (writer_drop_oldest && !draw_queue.empty()) {
-          draw_queue.pop_front();  // drop oldest frame
+      std::lock_guard<std::mutex> lk(dq_mtx);
+      if (decode_queue.size() >= decode_queue_size) {
+        if (decode_drop_oldest && !decode_queue.empty()) {
+          decode_queue.pop_front();
         } else {
-          goto after_enqueue;  // drop this frame for display/write
+          // Drop this frame's decode job to keep pipeline real-time.
+          goto after_gpu_stage;
         }
       }
-      DrawItem item;
-      item.color = color_frame.clone();
-      draw_queue.push_back(std::move(item));
+      decode_queue.push_back(std::move(job));
     }
-    draw_cv.notify_one();
+    dq_cv.notify_one();
 
-after_enqueue:
+after_gpu_stage:
     frame_num++;
     if (frame_num % 100 == 0) {
       cout << "Processed " << frame_num << " frames... "
-           << "Avg detections: " << (total_detections_before / frame_num) 
-           << " -> " << (total_detections_after / frame_num) << " (filtered)\r" << flush;
+           << "\r" << flush;
     }
   };
 
@@ -699,7 +806,14 @@ after_enqueue:
     }
   }
 
-  // Finish display/write thread and clean up
+  // Finish decode and display/write threads and clean up
+  {
+    std::lock_guard<std::mutex> lk(dq_mtx);
+    decode_done = true;
+  }
+  dq_cv.notify_all();
+  decode_thread.join();
+
   {
     std::lock_guard<std::mutex> lk(draw_mtx);
     display_done = true;
