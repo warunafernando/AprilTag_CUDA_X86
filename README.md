@@ -4,22 +4,40 @@ A high-performance CUDA-based AprilTag detection system with coordinate scaling 
 
 ## Overview
 
-This project provides a standalone implementation of the CUDA AprilTag detector based on the [Team766/apriltags_cuda](https://github.com/Team766/apriltags_cuda) repository. It includes several enhancements:
+This project provides a standalone implementation of the CUDA AprilTag detector based on the [Team766/apriltags_cuda](https://github.com/Team766/apriltags_cuda) repository, with a focus on **high-throughput, low-latency detection and visualization**. Key enhancements over the upstream code include:
 
-- **Coordinate Scaling Fix**: Corrects GPU detector coordinates from decimated space to full resolution
-- **Duplicate Detection Filtering**: Removes false positives and duplicate detections
-- **3D Visualization**: Real-time 3D pose visualization with distance measurement
-- **Performance Benchmarking**: Comprehensive performance analysis tools
+- **Correct Coordinate Scaling**: Fixes GPU detector coordinates from decimated space back to full-resolution image space.
+- **Robust Duplicate Filtering**: Removes false positives and duplicates while keeping the best detection per tag ID.
+- **3D Pose Visualization**: Real-time 3D pose (axes + distance) using OpenCV `solvePnP` / `drawFrameAxes` (thread-safe).
+- **2-Stage GPU/CPU Pipeline**: GPU Stage 1 for quad extraction, CPU Stage 2 for decoding, connected via a decode queue.
+- **Multi-Threaded I/O and Display**: Separate threads for frame reading, detection, CPU decode/drawing, and display/write.
+- **Config-Driven Tuning**: All key parameters (detector, camera, queues, reporting) are controlled via `config.txt`.
+- **Built-In Benchmarking**: Detailed per-stage timing and detection histograms for reproducible performance measurements.
 
 ## Features
 
-- GPU-accelerated AprilTag detection using CUDA
-- Real-time video processing with 3D visualization
-- Coordinate transformation fixes for accurate tag localization
-- Duplicate detection filtering for reliable results
-- Distance measurement from camera to tag
-- Frame-by-frame performance metrics
-- Support for multiple tag families (tag36h11, tag25h9, etc.)
+- **CUDA-accelerated AprilTag detection**
+  - GPU pre-processing and quad extraction with highly optimized CUDA kernels.
+  - CPU-based tag decoding using the cgpadwick apriltag library.
+
+- **2-stage detection pipeline with 4-thread architecture**
+  - Stage 1 (GPU) on frame N+1; Stage 2 (CPU decode + drawing) on frame N.
+  - Dedicated threads for frame reading, detection, decode/drawing, and display/write.
+
+- **Accurate coordinate and pose estimation**
+  - Correct coordinate scaling from decimated to full-resolution space.
+  - 3D pose estimation via OpenCV `solvePnP` with configurable camera and distortion parameters.
+
+- **Enhanced visualization**
+  - Tag outlines, ID labels, and color-coded 3D axes overlaid on the video.
+  - Compact top-left info table with FPS, ID, X, Y, Z, distance, and normalized probability for each tag.
+
+- **Configurable and measurable**
+  - Detector, filtering, camera, threading, and reporting options in `config.txt`.
+  - Built-in per-stage timing and detection histograms for each run.
+
+- **Multiple tag families**
+  - Supports `tag36h11`, `tag25h9`, and other cgpadwick families.
 
 ## Requirements
 
@@ -172,15 +190,44 @@ Default tag size set to 0.305m (1 foot) for accurate distance measurements. Adju
 
 Recent improvements to the visualization system:
 
-- **Information Table**: Compact table in top-left corner displaying:
-  - Current processing FPS
-  - Per-tag information: ID, X, Y, Z coordinates, Distance (meters), Probability (normalized 0-1)
-  - All numeric values with 2 decimal precision
-- **Optimized Layout**: Smaller fonts, compact table design
-- **3D Visualization**: Color-coded axes (X=red, Y=green, Z=blue) showing tag orientation
-- **Real-time Display**: Live video display with all visualizations overlaid
+- **Information Table**: Compact table in the top-left corner displaying:
+  - Current processing FPS (from the detector thread).
+  - Per-tag information: ID, X, Y, Z coordinates, Distance (meters), Probability (normalized 0–1).
+  - All numeric values with 2 decimal precision.
+- **Optimized Layout**: Small fonts and tight spacing to show multiple tags cleanly.
+- **3D Visualization**: Color-coded axes (X=red, Y=green, Z=blue) showing tag orientation.
+- **Real-time Display**: Live video display with all visualizations overlaid in a dedicated display thread.
 
-See `reports/VISUALIZATION_UPDATE_SUMMARY.md` for detailed information about visualization improvements.
+See `reports/VISUALIZATION_UPDATE_SUMMARY.md` for more detail.
+
+### 6. Two-Stage GPU/CPU Pipeline and Multi-Threading
+
+- **GPU Stage 1 (DetectGpuOnly)**:
+  - Converts the input frame to grayscale and decimated form.
+  - Runs thresholding, connected components, blob filtering, line fitting, and quad fitting on the GPU.
+  - Produces quad candidates and a preprocessed grayscale image on the host.
+
+- **CPU Stage 2 (DecodeTagsFromQuads)**:
+  - Decodes tags from the GPU-produced quads and grayscale buffer using a dedicated `apriltag_detector_t` and workerpool.
+  - Applies additional duplicate filtering by center distance.
+  - Computes 3D pose and renders overlays + the info table on a per-frame basis.
+
+- **Threaded Architecture**:
+  - Reader thread: prefetches frames into a bounded queue.
+  - Detector thread: runs GPU Stage 1 and enqueues `DecodeJob`s.
+  - Decode thread: runs CPU Stage 2 and enqueues fully-rendered frames.
+  - Display/write thread: owns `imshow` / `waitKey` and optional `VideoWriter`, fully decoupled from detection.
+
+### 7. Configurable Reporting and Histograms
+
+- Per-run summary includes:
+  - Total frames processed and average detector-thread FPS.
+  - Per-stage timing: frame read, detect total, CUDA ops, CPU decode, scaling, filtering, drawing, and write.
+  - Detection histogram **after filtering** (0/1/2/3/4 tags per frame).
+- Optional pre-filter reporting:
+  - Controlled via `[reporting]` section in `config.txt`:
+    - `show_before_filter: true` to also print pre-filter totals and histograms.
+    - Disabled by default to keep the console output minimal during normal runs.
 
 ## Algorithm and Pipeline
 
@@ -295,60 +342,71 @@ This design ensures that:
 
 ## Performance
 
-### Typical Performance (1280x1024 Grayscale Video)
+### Benchmark Setup
 
-Performance varies based on number of detected tags and scene complexity:
-- **Processing FPS (detector thread)**: ~245-265 FPS (depending on detection workload)
-- **Per-frame timing breakdown (main detection thread, typical averages)**:
-  - Frame read: 0.52-0.53 ms (Reader thread, non-blocking)
-  - Detection total: 2.30-2.31 ms
-    - CUDA operations: 1.51-1.55 ms (~66-67% of detection)
-    - CPU decode: 0.73-0.76 ms (~32-33% of detection)
-  - Scale coordinates: <0.01 ms
-  - Filter duplicates: <0.01 ms
-  - Draw (axes/text): 0.49-0.76 ms (overlays only, display is in a separate thread)
-  - Write frame: 2-5 ms (when enabled, runs in parallel display/write thread)
+All numbers below were obtained with:
 
-### Multi-Threaded Architecture
+- **Resolution**: 1280×1024 grayscale (input videos are `yuv420p` treated as 8-bit single-channel).
+- **Tool**: `video_visualize_fixed` with live display enabled and no output file.
+- **Videos**:
+  - `input/Stable.avi`: mostly static scene with a 4-tag grid.
+  - `input/Moving.avi`: camera/tag motion with varying tag counts per frame.
 
-The application uses a **four-thread architecture** with a 2-stage detection
-pipeline:
+These are **example test results** for this repository; your hardware and scenes will produce different numbers.
 
-1. **Reader Thread** (Frame Prefetching)
-   - Prefetches frames from the video file in parallel.
-   - Maintains a bounded queue (configurable, e.g. 10 frames).
-   - Eliminates blocking I/O from the main detector thread.
-   - Contributes to `Frame read` timing in reports.
+### Stable.avi (static scene)
 
-2. **Main Detector Thread (GPU Stage 1)**
-   - Pops frames from the reader queue.  
-   - Runs `GpuDetector::DetectGpuOnly()` to execute all CUDA stages and produce
-     quad candidates + grayscale image.  
-   - Builds `DecodeJob`s and pushes them into a bounded **decode queue**.  
-   - Accumulates **CUDA-only timing** for detailed performance analysis.
+- **Frames processed**: 2018  
+- **Total time**: 6.46 s  
+- **Average processing FPS (detector thread)**: **312.39 FPS**
 
-3. **Decode Thread (CPU Stage 2)**
-   - Pops `DecodeJob`s from the decode queue.  
-   - Runs `DecodeTagsFromQuads()` to perform quad decoding and tag ID
-     extraction using a dedicated `apriltag_detector_t` + workerpool.  
-   - Scales coordinates (if needed), filters duplicates, computes tag poses
-     with `solvePnP`, and draws 3D overlays + the info table.  
-   - Enqueues fully rendered `DrawItem`s into the **draw queue**.
+- **Detections after filtering**:
+  - Total: **2011**
+  - Average per frame: ≈ **1.00 tags/frame**
+  - Frame detection histogram (after filtering):
+    - **1 tag**: 2011 frames
 
-4. **Display/Writer Thread**
-   - Pops `DrawItem`s from the draw queue.  
-   - Displays frames with `imshow`/`waitKey`.  
-   - Optionally writes frames to the output video when `--output` is provided.  
-   - Runs completely in parallel with detection and decode, so display I/O does
-     not affect detector timing.
+- **Per-frame timing (ms, averages)**:
+  - **Frame read**: 0.69
+  - **Detect total**: 1.80
+    - CUDA ops: 1.78
+    - CPU decode: 0.94
+  - **Scale coordinates**: 0.00
+  - **Filter duplicates**: 0.00
+  - **Draw (axes/text)**: 1.02
+  - **Write frame**: 0.00 (display-only run)
 
-**Threading Benefits**:
-- Non-blocking frame reading (0.52-0.53 ms in parallel)
-- Display and video writing fully decoupled from detection
-- Overall detector-thread throughput: ~245-265 FPS for 1280x1024 video
-- Detection pipeline alone: ~440-450 FPS potential
+### Moving.avi (moving scene)
 
-See `reports/THREADING_ARCHITECTURE_AND_TEST_RESULTS.md` for detailed threading analysis and test results.
+- **Frames processed**: 1916  
+- **Total time**: 6.05 s  
+- **Average processing FPS (detector thread)**: **316.66 FPS**
+
+- **Detections after filtering**:
+  - Total: **1378**
+  - Average per frame: ≈ **0.72 tags/frame**
+  - Frame detection histogram (after filtering):
+    - **0 tags**: 534 frames
+    - **1 tag**: 1378 frames
+
+- **Per-frame timing (ms, averages)**:
+  - **Frame read**: 0.69
+  - **Detect total**: 1.82
+    - CUDA ops: 1.79
+    - CPU decode: 0.92
+  - **Scale coordinates**: 0.00
+  - **Filter duplicates**: 0.00
+  - **Draw (axes/text)**: 0.76
+  - **Write frame**: 0.00 (display-only run)
+
+### Multi-Threaded Architecture Impact
+
+- Frame reading is **fully overlapped** with detection and contributes ~0.7 ms in parallel.
+- Display and optional video writing run in a dedicated thread and **do not block** the detector.
+- The detector thread spends ~**1.8 ms/frame** in the combined GPU+CPU detection pipeline  
+  (theoretical throughput ≈ **550 FPS** ignoring I/O and drawing).
+
+See `reports/THREADING_ARCHITECTURE_AND_TEST_RESULTS.md` for more details on the threading model and timing methodology.
 
 ### Detection Quality
 - **Detection accuracy**: ~99%+ with coordinate fixes
@@ -369,8 +427,24 @@ All detector parameters can be configured via `config.txt`. Key settings include
 - **Threading parameters**:
   - `[prefetching]`: Frame prefetching queue size and policy
   - `[writer]`: Video output queue size and policy
+  - `[reporting]`: Controls whether pre-filter stats are printed
 
-See `config.txt` for all available options and default values.
+See `config.txt` for all available options and default values. Common keys:
+
+- `[detector]`
+  - `family`: Tag family (e.g. `tag36h11`)
+  - `quad_decimate`: Decimation factor (must match GPU detector assumptions, typically 2.0)
+  - `nthreads`, `refine_edges`, `debug`
+- `[filtering]`
+  - `min_distance_for_duplicates`: Minimum pixel distance for duplicate filtering
+- `[camera]` / `[distortion]`
+  - Camera intrinsics and distortion coefficients used for pose estimation.
+- `[prefetching]`
+  - `enabled`, `queue_size`, `drop_oldest`
+- `[writer]`
+  - `queue_size`, `drop_oldest`
+- `[reporting]`
+  - `show_before_filter`: Print pre-filter stats and histograms when `true`.
 
 ## Troubleshooting
 
