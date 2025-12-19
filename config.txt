@@ -49,3 +49,8 @@ drop_oldest: true
 [reporting]
 show_before_filter: false
 
+[input]
+use_camera: false
+camera_index: 0
+
+

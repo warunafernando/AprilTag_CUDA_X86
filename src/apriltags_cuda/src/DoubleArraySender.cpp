@@ -10,8 +10,15 @@ the Orin. Later, this should be changed to a new table, such as /Orin or
 
 DoubleArraySender::DoubleArraySender(std::string key) {
   inst_ = nt::NetworkTableInstance::GetDefault();
-  inst_.SetServer(TABLE_ADDRESS);
-  inst_.StartClient4(TABLE_ADDRESS);
+  // Check if we should use localhost (for GUI mode)
+  if (std::string(TABLE_ADDRESS) == "localhost") {
+    // Start as server for local communication
+    inst_.StartServer();
+  } else {
+    // Connect to remote server
+    inst_.SetServer(TABLE_ADDRESS);
+    inst_.StartClient4(TABLE_ADDRESS);
+  }
   auto table = inst_.GetTable(TABLE_NAME);
   nt::DoubleArrayTopic topic = table->GetDoubleArrayTopic(key);
   publisher_ = topic.Publish();

@@ -19,6 +19,7 @@ find_package(GTest REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(Qt5 COMPONENTS Widgets REQUIRED)
 pkg_check_modules(APRILTAG REQUIRED apriltag)
 pkg_check_modules(LIBAV REQUIRED libavformat libavcodec libavutil libswscale)
 
@@ -296,8 +297,10 @@ target_link_libraries(video_visualize_fixed
     ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_calib3d.so
+    MVSDK
     glog::glog
-    Threads::Threads)
+    Threads::Threads
+    rt)  # For shared memory (shm_open, etc.)
 target_include_directories(video_visualize_fixed PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tools ${LIBAV_INCLUDE_DIRS} /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
 # Suppress nvcc warning 611 (MultiBandBlender override) for this CUDA TU
 set_source_files_properties(tools/video_visualize_fixed.cu PROPERTIES
@@ -373,6 +376,62 @@ target_link_libraries(debug_coordinate_pipeline
     ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
     glog::glog)
 target_include_directories(debug_coordinate_pipeline PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(camera_gui tools/camera_gui.cpp)
+target_link_libraries(camera_gui
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    glog::glog)
+target_include_directories(camera_gui PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(camera_gui_qt tools/camera_gui_qt.cpp)
+target_link_libraries(camera_gui_qt
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    MVSDK
+    Qt5::Widgets
+    glog::glog
+    rt)  # For shared memory (shm_open, etc.)
+target_include_directories(camera_gui_qt PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(test_camera_read tools/test_camera_read.cpp)
+target_link_libraries(test_camera_read
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    MVSDK
+    glog::glog)
+target_include_directories(test_camera_read PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(test_camera_read_optimized tools/test_camera_read_optimized.cpp)
+target_link_libraries(test_camera_read_optimized
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    MVSDK
+    glog::glog
+    Threads::Threads)
+target_include_directories(test_camera_read_optimized PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(test_camera_read_threaded tools/test_camera_read_threaded.cpp)
+target_link_libraries(test_camera_read_threaded
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    MVSDK
+    glog::glog
+    Threads::Threads)
+target_include_directories(test_camera_read_threaded PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
 
 # Add a custom target to format all source files
 add_custom_target(format_all

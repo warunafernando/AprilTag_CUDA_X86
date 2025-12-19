@@ -147,3 +147,5 @@ The moving sequence shows slightly higher detector-thread FPS (~263 FPS) with ne
 4. For applications that care primarily about **throughput**, the current architecture delivers very high performance without further changes.
 
 
+
+
