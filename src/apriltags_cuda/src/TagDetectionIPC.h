@@ -38,8 +38,38 @@ struct TagDetectionData {
   }
 };
 
+// Shared memory structure for frame data (GUI -> Detection process)
+struct FrameIPCData {
+  uint32_t width;
+  uint32_t height;
+  uint32_t channels;
+  uint32_t frame_id;
+  double timestamp;
+  uint8_t data[1920 * 1080];  // Max 1920x1080 grayscale frame
+  static constexpr size_t MAX_WIDTH = 1920;
+  static constexpr size_t MAX_HEIGHT = 1080;
+  static constexpr size_t MAX_DATA_SIZE = MAX_WIDTH * MAX_HEIGHT;
+};
+
+// Shared memory structure for annotated frames (Detection process -> GUI)
+struct AnnotatedFrameIPCData {
+  uint32_t width;
+  uint32_t height;
+  uint32_t channels;  // Should be 3 for BGR
+  uint32_t frame_id;
+  double timestamp;
+  uint8_t data[1920 * 1080 * 3];  // Max 1920x1080 BGR frame
+  static constexpr size_t MAX_WIDTH = 1920;
+  static constexpr size_t MAX_HEIGHT = 1080;
+  static constexpr size_t MAX_DATA_SIZE = MAX_WIDTH * MAX_HEIGHT * 3;
+};
+
 // Shared memory key for tag detection data
 inline const char* TAG_IPC_KEY = "/apriltag_detections_shm";
+// Shared memory key for frame data (GUI -> Detection process)
+inline const char* FRAME_IPC_KEY = "/apriltag_frames_shm";
+// Shared memory key for annotated frames (Detection process -> GUI)
+inline const char* ANNOTATED_FRAME_IPC_KEY = "/apriltag_annotated_frames_shm";
 
 #endif
 

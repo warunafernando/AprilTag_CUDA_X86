@@ -99,7 +99,11 @@ public:
 
   // Copy the host-side grayscale image used for CPU decode into the provided
   // buffer. The buffer is resized to width_ * height_.
-  void CopyGrayHostTo(std::vector<uint8_t> &out) const;
+  void CopyGrayHostTo(std::vector<uint8_t> &out);
+  
+  // Mirror the gray image horizontally on GPU (before copying to host)
+  // This should be called after DetectGpuOnly() but before CopyGrayHostTo()
+  void MirrorGrayImageOnGpu();
 
   // Image size helpers.
   int Width() const { return static_cast<int>(width_); }

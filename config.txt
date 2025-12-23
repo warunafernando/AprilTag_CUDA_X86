@@ -54,3 +54,23 @@ use_camera: false
 camera_index: 0
 
 
+
+# GUI Settings
+[window]
+width: 1200
+height: 800
+x: 100
+y: 100
+
+[camera_selection]
+backend: mvsdk
+camera_index: 0
+mode_index: 0
+
+[camera_controls]
+exposure: 95
+brightness: 46
+gain: 100
+contrast: 100
+saturation: 100
+sharpness: 0

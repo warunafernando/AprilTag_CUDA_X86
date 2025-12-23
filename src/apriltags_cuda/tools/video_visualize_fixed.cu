@@ -30,6 +30,16 @@ extern "C" {
 }
 #include "g2d.h"
 
+// MindVision SDK support
+#include "CameraApi.h"
+
+// Shared memory IPC support
+#include "TagDetectionIPC.h"
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 using namespace std;
 using namespace cv;
 
@@ -105,6 +115,33 @@ bool is_valid_detection(apriltag_detection_t *det, int width, int height) {
     }
   }
   return true;
+}
+
+// Mirror detection coordinates horizontally (flip x coordinates)
+void mirror_detection_coordinates(apriltag_detection_t *det, int width) {
+  // Mirror center coordinates
+  det->c[0] = width - 1 - det->c[0];
+  
+  // Mirror all corner coordinates and swap to maintain correct orientation
+  // After horizontal flip: top-left becomes top-right, top-right becomes top-left
+  // So we swap p[0] with p[1], and p[2] with p[3]
+  double temp[2];
+  
+  // First mirror all x coordinates
+  for (int i = 0; i < 4; i++) {
+    det->p[i][0] = width - 1 - det->p[i][0];
+  }
+  
+  // Then swap corners to maintain correct orientation after horizontal mirror
+  // Swap top corners: p[0] <-> p[1]
+  temp[0] = det->p[0][0]; temp[1] = det->p[0][1];
+  det->p[0][0] = det->p[1][0]; det->p[0][1] = det->p[1][1];
+  det->p[1][0] = temp[0]; det->p[1][1] = temp[1];
+  
+  // Swap bottom corners: p[2] <-> p[3]
+  temp[0] = det->p[2][0]; temp[1] = det->p[2][1];
+  det->p[2][0] = det->p[3][0]; det->p[2][1] = det->p[3][1];
+  det->p[3][0] = temp[0]; det->p[3][1] = temp[1];
 }
 
 // Filter duplicate detections - keep the one with best decision margin
@@ -328,6 +365,11 @@ int main(int argc, char **argv) {
   string family = "tag36h11";
   double tag_size = 0.305; // Tag size in meters (1 foot = 0.305m, adjust as needed)
   double min_distance = 50.0; // Minimum distance between detections to consider them different
+  bool horizontal_mirror = false; // Horizontal mirror/flip for detection
+  int camera_index = -1;
+  bool use_mvsdk = false;
+  bool no_display = false;
+  bool use_frames_shm = false;
 
   for (int i = 1; i < argc; ++i) {
     string arg(argv[i]);
@@ -341,15 +383,26 @@ int main(int argc, char **argv) {
       tag_size = atof(argv[++i]);
     } else if (arg == "--min_distance" && i + 1 < argc) {
       min_distance = atof(argv[++i]);
+    } else if ((arg == "--camera" || arg == "-c") && i + 1 < argc) {
+      camera_index = atoi(argv[++i]);
+    } else if (arg == "--mvsdk") {
+      use_mvsdk = true;
+    } else if (arg == "--no-display") {
+      no_display = true;
+    } else if (arg == "--frames-shm") {
+      use_frames_shm = true;
+    } else if (arg == "--mirror" || arg == "-m") {
+      horizontal_mirror = true;
     } else if (arg == "--help" || arg == "-h") {
-      cout << "Usage: video_visualize_fixed --video <input.avi> --output <output.avi> "
+      cout << "Usage: video_visualize_fixed [--video <input.avi> | --camera <index> [--mvsdk] | --frames-shm] "
+              "[--output <output.avi>] [--no-display] [--mirror] "
               "[--family <tag36h11>] [--tag_size <0.1>] [--min_distance <50.0>]\n";
       return 0;
     }
   }
 
-  if (video_path.empty()) {
-    cerr << "Error: --video is required\n";
+  if (video_path.empty() && camera_index < 0 && !use_frames_shm) {
+    cerr << "Error: Either --video, --camera, or --frames-shm is required\n";
     return 1;
   }
 
@@ -376,42 +429,255 @@ int main(int argc, char **argv) {
   const int cfg_writer_q = std::max(1, config.get_int("writer.queue_size", 5));
   const bool writer_drop_oldest = config.get_bool("writer.drop_oldest", true);
 
-  // Use OpenCV VideoCapture and ask backend for grayscale frames
-  VideoCapture cap(video_path, CAP_ANY);
-  if (!cap.isOpened()) {
-    cerr << "Failed to open video: " << video_path << endl;
-    return 1;
-  }
-
-  // CRITICAL: Don't convert to RGB - read grayscale directly for better performance
-  cap.set(CAP_PROP_CONVERT_RGB, false);
-
-  // Get video properties
-  int width = static_cast<int>(cap.get(CAP_PROP_FRAME_WIDTH));
-  int height = static_cast<int>(cap.get(CAP_PROP_FRAME_HEIGHT));
-  double fps = cap.get(CAP_PROP_FPS);
-  if (fps <= 0) {
-    fps = 30.0; // Default if FPS not available
-    cout << "FPS not available, using default: 30.0 FPS\n";
-  } else {
-    cout << "Using video FPS from metadata: " << fixed << setprecision(2) << fps << "\n";
-  }
-
-  // Read first frame to verify (backend should give us grayscale)
+  // Camera handle for MindVision SDK
+  CameraHandle mv_camera_handle = 0;
+  unsigned char *mv_rgb_buffer = nullptr;
+  tSdkCameraCapbility mv_capability;
+  bool is_mv_mono = false;
+  
+  // Shared memory for frames (when use_frames_shm is true)
+  FrameIPCData* frame_shm = nullptr;
+  int frame_shm_fd = -1;
+  uint32_t last_frame_id = 0;
+  
+  // VideoCapture for video files and regular cameras
+  VideoCapture cap;
+  
+  int width, height;
+  double fps = 30.0;
   Mat frame;
-  if (!cap.read(frame)) {
-    cerr << "Could not read first frame\n";
-    return 1;
-  }
   
-  if (frame.empty()) {
-    cerr << "First frame is empty\n";
-    return 1;
+  if (!video_path.empty()) {
+    // Use OpenCV VideoCapture for video file
+    cap.open(video_path, CAP_ANY);
+    if (!cap.isOpened()) {
+      cerr << "Failed to open video: " << video_path << endl;
+      return 1;
+    }
+
+    // CRITICAL: Don't convert to RGB - read grayscale directly for better performance
+    cap.set(CAP_PROP_CONVERT_RGB, false);
+
+    // Get video properties
+    width = static_cast<int>(cap.get(CAP_PROP_FRAME_WIDTH));
+    height = static_cast<int>(cap.get(CAP_PROP_FRAME_HEIGHT));
+    fps = cap.get(CAP_PROP_FPS);
+    if (fps <= 0) {
+      fps = 30.0; // Default if FPS not available
+      cout << "FPS not available, using default: 30.0 FPS\n";
+    } else {
+      cout << "Using video FPS from metadata: " << fixed << setprecision(2) << fps << "\n";
+    }
+
+    // Read first frame to verify (backend should give us grayscale)
+    if (!cap.read(frame)) {
+      cerr << "Could not read first frame\n";
+      return 1;
+    }
+    
+    if (frame.empty()) {
+      cerr << "First frame is empty\n";
+      return 1;
+    }
+    
+    // Ensure grayscale
+    if (frame.type() != CV_8UC1) {
+      if (frame.channels() == 2) {
+        cvtColor(frame, frame, COLOR_YUV2GRAY_YUY2);
+      } else if (frame.channels() == 3) {
+        cvtColor(frame, frame, COLOR_BGR2GRAY);
+      }
+    }
+    cout << "First frame size: " << frame.cols << "x" << frame.rows 
+         << ", type: " << frame.type() << " (grayscale)" << endl;
+  } else if (use_mvsdk && camera_index >= 0) {
+    // Use MindVision SDK for camera
+    cout << "Initializing MindVision SDK..." << endl;
+    CameraSdkStatus status = CameraSdkInit(1);
+    if (status != CAMERA_STATUS_SUCCESS) {
+      cerr << "Error: CameraSdkInit failed with status " << status << endl;
+      return 1;
+    }
+    
+    // Enumerate cameras
+    tSdkCameraDevInfo camera_list[16];
+    INT camera_count = 16;
+    status = CameraEnumerateDevice(camera_list, &camera_count);
+    if (status != CAMERA_STATUS_SUCCESS || camera_count <= 0) {
+      cerr << "Error: No MindVision cameras found!" << endl;
+      return 1;
+    }
+    
+    if (camera_index >= camera_count) {
+      cerr << "Error: Invalid camera index " << camera_index << " (found " << camera_count << " cameras)" << endl;
+      return 1;
+    }
+    
+    cout << "Opening MindVision camera index " << camera_index << "..." << endl;
+    status = CameraInit(&camera_list[camera_index], -1, -1, &mv_camera_handle);
+    if (status != CAMERA_STATUS_SUCCESS) {
+      cerr << "Error: CameraInit failed with status " << status << endl;
+      return 1;
+    }
+    
+    // Get capability
+    CameraGetCapability(mv_camera_handle, &mv_capability);
+    is_mv_mono = mv_capability.sIspCapacity.bMonoSensor;
+    
+    // Allocate RGB buffer only if not monochrome
+    int max_width = mv_capability.sResolutionRange.iWidthMax;
+    int max_height = mv_capability.sResolutionRange.iHeightMax;
+    if (!is_mv_mono) {
+      mv_rgb_buffer = static_cast<unsigned char *>(
+          malloc(static_cast<size_t>(max_width) * static_cast<size_t>(max_height) * 3));
+    }
+    
+    // Set output format to MONO8 (grayscale) - force grayscale for AprilTag
+    cout << "Setting camera to MONO8 (grayscale) format..." << endl;
+    CameraSetIspOutFormat(mv_camera_handle, CAMERA_MEDIA_TYPE_MONO8);
+    
+    // Set resolution (use 1280x1024 for high FPS)
+    width = 1280;
+    height = 1024;
+    cout << "Setting resolution to " << width << "x" << height << "..." << endl;
+    status = CameraSetImageResolutionEx(mv_camera_handle, 0xff, 0, 0, 0, 0, width, height, 0, 0);
+    if (status != CAMERA_STATUS_SUCCESS) {
+      cerr << "Warning: CameraSetImageResolutionEx returned status " << status << endl;
+    }
+    
+    // Set frame speed to highest available
+    int max_frame_speed = mv_capability.iFrameSpeedDesc - 1;
+    if (max_frame_speed < 0) max_frame_speed = 0;
+    if (max_frame_speed > FRAME_SPEED_SUPER) max_frame_speed = FRAME_SPEED_SUPER;
+    CameraSetFrameSpeed(mv_camera_handle, max_frame_speed);
+    
+    // Disable auto exposure and set fixed exposure for high FPS
+    CameraSetAeState(mv_camera_handle, FALSE);
+    CameraSetExposureTime(mv_camera_handle, 3000); // 3000 microseconds for ~211 FPS
+    
+    // Start capture
+    CameraPlay(mv_camera_handle);
+    
+    // Allow camera to start streaming
+    this_thread::sleep_for(chrono::milliseconds(200));
+    
+    // Read first frame
+    BYTE *pbyBuffer = nullptr;
+    tSdkFrameHead sFrameInfo;
+    status = CameraGetImageBuffer(mv_camera_handle, &sFrameInfo, &pbyBuffer, 100);
+    if (status != CAMERA_STATUS_SUCCESS) {
+      cerr << "Error: Failed to get first frame from camera (status " << status << ")" << endl;
+      CameraUnInit(mv_camera_handle);
+      return 1;
+    }
+    
+    // Create Mat from frame data (MONO8 format)
+    width = sFrameInfo.iWidth;
+    height = sFrameInfo.iHeight;
+    frame = Mat(height, width, CV_8UC1, pbyBuffer, sFrameInfo.iWidth);
+    frame = frame.clone(); // Clone to own the data
+    
+    CameraReleaseImageBuffer(mv_camera_handle, pbyBuffer);
+    
+    cout << "Camera initialized: " << width << "x" << height 
+         << ", format: MONO8 (grayscale)" << endl;
+    fps = 211.0; // Approximate FPS for this mode
+  } else if (camera_index >= 0) {
+    // Use OpenCV VideoCapture for regular camera
+    cap.open(camera_index, CAP_ANY);
+    if (!cap.isOpened()) {
+      cerr << "Failed to open camera index " << camera_index << endl;
+      return 1;
+    }
+    
+    cap.set(CAP_PROP_CONVERT_RGB, false);
+    
+    width = static_cast<int>(cap.get(CAP_PROP_FRAME_WIDTH));
+    height = static_cast<int>(cap.get(CAP_PROP_FRAME_HEIGHT));
+    fps = cap.get(CAP_PROP_FPS);
+    if (fps <= 0) fps = 30.0;
+    
+    if (!cap.read(frame)) {
+      cerr << "Could not read first frame from camera\n";
+      return 1;
+    }
+    
+    // Ensure grayscale
+    if (frame.type() != CV_8UC1) {
+      if (frame.channels() == 2) {
+        cvtColor(frame, frame, COLOR_YUV2GRAY_YUY2);
+      } else if (frame.channels() == 3) {
+        cvtColor(frame, frame, COLOR_BGR2GRAY);
+      }
+    }
+    
+    cout << "Camera opened: " << width << "x" << height 
+         << ", type: " << frame.type() << " (grayscale)" << endl;
+  } else if (use_frames_shm) {
+    // Read frames from shared memory (GUI writes frames here)
+    cout << "Reading frames from shared memory..." << endl;
+    
+    // Open shared memory for frames
+    frame_shm_fd = shm_open(FRAME_IPC_KEY, O_RDONLY, 0666);
+    if (frame_shm_fd < 0) {
+      cerr << "Error: Failed to open shared memory for frames: " << FRAME_IPC_KEY << endl;
+      return 1;
+    }
+    
+    frame_shm = static_cast<FrameIPCData*>(
+        mmap(0, sizeof(FrameIPCData), PROT_READ, MAP_SHARED, frame_shm_fd, 0));
+    if (frame_shm == MAP_FAILED) {
+      cerr << "Error: Failed to map shared memory for frames" << endl;
+      ::close(frame_shm_fd);
+      return 1;
+    }
+    
+    // Wait for first frame to get dimensions and valid frame_id
+    cout << "Waiting for first frame from GUI..." << endl;
+    int wait_count = 0;
+    uint32_t initial_frame_id = 0;
+    while (frame_shm->width == 0 || frame_shm->height == 0 || frame_shm->frame_id == 0) {
+      this_thread::sleep_for(chrono::milliseconds(100));
+      wait_count++;
+      if (wait_count > 100) {  // 10 seconds timeout
+        cerr << "Error: Timeout waiting for first frame from GUI" << endl;
+        munmap(frame_shm, sizeof(FrameIPCData));
+        ::close(frame_shm_fd);
+        return 1;
+      }
+    }
+    
+    width = frame_shm->width;
+    height = frame_shm->height;
+    fps = 30.0; // Default FPS for shared memory frames
+    initial_frame_id = frame_shm->frame_id;
+    
+    // Wait a bit more to ensure frame data is fully written
+    this_thread::sleep_for(chrono::milliseconds(100));
+    
+    // Create Mat from shared memory data - ensure we have a valid frame_id
+    if (frame_shm->frame_id == initial_frame_id && frame_shm->frame_id > 0) {
+      frame = Mat(height, width, CV_8UC1, (void*)frame_shm->data, width);
+      frame = frame.clone(); // Clone to own the data
+      last_frame_id = frame_shm->frame_id;
+      
+      // Validate the frame before proceeding
+      if (frame.empty() || frame.data == nullptr || frame.cols != width || frame.rows != height) {
+        cerr << "Error: Invalid initial frame from shared memory" << endl;
+        munmap(frame_shm, sizeof(FrameIPCData));
+        ::close(frame_shm_fd);
+        return 1;
+      }
+    } else {
+      cerr << "Error: Frame ID changed before we could read initial frame" << endl;
+      munmap(frame_shm, sizeof(FrameIPCData));
+      ::close(frame_shm_fd);
+      return 1;
+    }
+    
+    cout << "Shared memory initialized: " << width << "x" << height 
+         << " (grayscale from GUI), frame_id=" << initial_frame_id << endl;
   }
-  
-  CV_Assert(frame.type() == CV_8UC1);  // Grayscale
-  cout << "First frame size: " << frame.cols << "x" << frame.rows 
-       << ", type: " << frame.type() << " (grayscale)" << endl;
 
   // Setup detector
   apriltag_family_t *tf = nullptr;
@@ -449,6 +715,57 @@ int main(int argc, char **argv) {
     }
   }
 
+  // Shared memory for tag detections (write to GUI)
+  TagDetectionData* tag_shm = nullptr;
+  int tag_shm_fd = -1;
+  // Shared memory for annotated frames (write to GUI)
+  AnnotatedFrameIPCData* annotated_frame_shm = nullptr;
+  int annotated_frame_shm_fd = -1;
+  std::atomic<uint32_t> annotated_frame_id_counter{0};
+  
+  if (!no_display || use_frames_shm) {
+    // Create shared memory for tag detections
+    tag_shm_fd = shm_open(TAG_IPC_KEY, O_CREAT | O_RDWR, 0666);
+    if (tag_shm_fd >= 0) {
+      if (ftruncate(tag_shm_fd, sizeof(TagDetectionData)) == 0) {
+        void* mem = mmap(0, sizeof(TagDetectionData), PROT_READ | PROT_WRITE, MAP_SHARED, tag_shm_fd, 0);
+        if (mem != MAP_FAILED) {
+          tag_shm = static_cast<TagDetectionData*>(mem);
+          tag_shm->clear();
+        } else {
+          ::close(tag_shm_fd);
+          tag_shm_fd = -1;
+        }
+      } else {
+        ::close(tag_shm_fd);
+        tag_shm_fd = -1;
+      }
+    }
+    
+    // Create shared memory for annotated frames (when using --frames-shm)
+    if (use_frames_shm) {
+      annotated_frame_shm_fd = shm_open(ANNOTATED_FRAME_IPC_KEY, O_CREAT | O_RDWR, 0666);
+      if (annotated_frame_shm_fd >= 0) {
+        if (ftruncate(annotated_frame_shm_fd, sizeof(AnnotatedFrameIPCData)) == 0) {
+          void* mem = mmap(0, sizeof(AnnotatedFrameIPCData), PROT_READ | PROT_WRITE, MAP_SHARED, annotated_frame_shm_fd, 0);
+          if (mem != MAP_FAILED) {
+            annotated_frame_shm = static_cast<AnnotatedFrameIPCData*>(mem);
+            annotated_frame_shm->frame_id = 0;
+            annotated_frame_shm->width = 0;
+            annotated_frame_shm->height = 0;
+            annotated_frame_shm->channels = 3;
+          } else {
+            ::close(annotated_frame_shm_fd);
+            annotated_frame_shm_fd = -1;
+          }
+        } else {
+          ::close(annotated_frame_shm_fd);
+          annotated_frame_shm_fd = -1;
+        }
+      }
+    }
+  }
+
   size_t frame_num = 0;
   auto t_start = chrono::steady_clock::now();
   vector<double> frame_times;
@@ -461,6 +778,7 @@ int main(int argc, char **argv) {
   double acc_read_ms = 0.0;
   double acc_detect_ms = 0.0;
   double acc_cuda_ms = 0.0;
+  double acc_mirror_ms = 0.0;
   double acc_cpu_decode_ms = 0.0;
   double acc_scale_ms = 0.0;
   double acc_filter_ms = 0.0;
@@ -473,8 +791,18 @@ int main(int argc, char **argv) {
   size_t writer_frames = 0;
   std::atomic<double> acc_read_ms_atomic{0.0};
 
-  cout << "Processing video: " << video_path << endl;
-  cout << "Output: " << output_path << endl;
+  if (!video_path.empty()) {
+    cout << "Processing video: " << video_path << endl;
+  } else if (use_frames_shm) {
+    cout << "Processing frames from shared memory (GUI)" << endl;
+  } else if (use_mvsdk) {
+    cout << "Processing from MindVision camera (index " << camera_index << ")" << endl;
+  } else {
+    cout << "Processing from camera (index " << camera_index << ")" << endl;
+  }
+  if (!output_path.empty()) {
+    cout << "Output: " << output_path << endl;
+  }
   cout << "Resolution: " << width << "x" << height << " @ " << fps << " FPS\n";
   cout << "Min distance for duplicate filtering: " << min_distance << " pixels\n";
 
@@ -534,9 +862,11 @@ int main(int argc, char **argv) {
         draw_queue.pop_front();
       }
 
-      // Display on screen
-      imshow("AprilTags", item.color);
-      waitKey(1);
+      // Display on screen (unless disabled)
+      if (!no_display) {
+        imshow("AprilTags", item.color);
+        waitKey(1);
+      }
 
       // Optional video writing (non-blocking for detector thread)
       if (write_enabled) {
@@ -584,6 +914,42 @@ int main(int argc, char **argv) {
         decode_queue.pop_front();
       }
 
+      // Mirroring is now done on GPU (in main thread after DetectGpuOnly, before decode thread)
+      // Gray image and quads are already mirrored when they reach here
+      
+      // Debug: print quad count periodically
+      static int debug_frame_count = 0;
+      if (++debug_frame_count % 100 == 0) {
+        cout << "Frame " << job.frame_index << ": " << job.quads.size() << " quads found" << endl;
+        cout << "  Gray image: " << job.width << "x" << job.height << ", size: " << job.gray.size() << endl;
+        if (!job.quads.empty()) {
+          cout << "  First quad corners: (" << job.quads[0].corners[0][0] << "," << job.quads[0].corners[0][1] << "), "
+               << "(" << job.quads[0].corners[1][0] << "," << job.quads[0].corners[1][1] << "), "
+               << "(" << job.quads[0].corners[2][0] << "," << job.quads[0].corners[2][1] << "), "
+               << "(" << job.quads[0].corners[3][0] << "," << job.quads[0].corners[3][1] << ")" << endl;
+          // Check if quad coordinates are in bounds
+          bool in_bounds = true;
+          for (int i = 0; i < 4; i++) {
+            if (job.quads[0].corners[i][0] < 0 || job.quads[0].corners[i][0] >= job.width ||
+                job.quads[0].corners[i][1] < 0 || job.quads[0].corners[i][1] >= job.height) {
+              in_bounds = false;
+              break;
+            }
+          }
+          cout << "  Quad in bounds: " << (in_bounds ? "yes" : "no") << endl;
+          // Check gray image sample at first quad corner
+          if (in_bounds && job.gray.size() >= job.width * job.height) {
+            int x = static_cast<int>(job.quads[0].corners[0][0]);
+            int y = static_cast<int>(job.quads[0].corners[0][1]);
+            if (x >= 0 && x < job.width && y >= 0 && y < job.height) {
+              uint8_t pixel = job.gray[y * job.width + x];
+              cout << "  Gray pixel at first corner: " << static_cast<int>(pixel) << endl;
+            }
+          }
+        }
+        cout << "  Decimate factor: " << td->quad_decimate << endl;
+      }
+      
       auto cpu_start = chrono::steady_clock::now();
       frc971::apriltag::DecodeTagsFromQuads(
           job.quads, job.gray.data(), job.width, job.height,
@@ -594,6 +960,9 @@ int main(int argc, char **argv) {
 
       const zarray_t *detections_const = detections;
       int det_before = zarray_size(detections_const);
+      if (debug_frame_count % 100 == 0) {
+        cout << "  -> " << det_before << " detections after decode" << endl;
+      }
       total_detections_before += det_before;
       det_hist_before[det_before]++;
 
@@ -606,6 +975,10 @@ int main(int argc, char **argv) {
           scale_detection_coordinates(det, gpu_decimate);
         }
       }
+      
+      // Note: Mirroring is done in CPU thread before decode (above), so coordinates are already correct
+      // No need to mirror coordinates again here
+      
       auto scale_end = chrono::steady_clock::now();
       acc_scale_ms +=
           chrono::duration<double, milli>(scale_end - scale_start).count();
@@ -622,13 +995,18 @@ int main(int argc, char **argv) {
           chrono::duration<double, milli>(filt_end - filt_start).count();
 
       auto draw_start = chrono::steady_clock::now();
-      // For visualization, always use the original input grayscale frame so
-      // that the user sees a clean image (independent of how the GPU stores
-      // its internal gray buffer for detection).
+      // For visualization, use the original input grayscale frame
+      // If mirroring is enabled, flip the display frame to match the mirrored coordinates
       Mat gray(job.disp_height, job.disp_width, CV_8UC1,
                job.display_gray.data());
+      Mat gray_for_display;
+      if (horizontal_mirror) {
+        cv::flip(gray, gray_for_display, 1);  // 1 = horizontal flip
+      } else {
+        gray_for_display = gray;
+      }
       Mat color_frame;
-      cvtColor(gray, color_frame, COLOR_GRAY2BGR);
+      cvtColor(gray_for_display, color_frame, COLOR_GRAY2BGR);
 
       vector<TagPoseInfo> tag_poses;
       for (auto *det : filtered) {
@@ -638,7 +1016,50 @@ int main(int argc, char **argv) {
         }
       }
 
+      // Write tag detections to shared memory for GUI
+      if (tag_shm != nullptr) {
+        tag_shm->timestamp = chrono::duration<double>(
+            chrono::steady_clock::now().time_since_epoch()).count();
+        tag_shm->num_tags = 0;
+        for (const auto& pose : tag_poses) {
+          if (tag_shm->num_tags < TagDetectionData::MAX_TAGS) {
+            tag_shm->tags[tag_shm->num_tags].id = pose.id;
+            tag_shm->tags[tag_shm->num_tags].x = pose.x;
+            tag_shm->tags[tag_shm->num_tags].y = pose.y;
+            tag_shm->tags[tag_shm->num_tags].z = pose.z;
+            tag_shm->tags[tag_shm->num_tags].decision_margin = pose.decision_margin;
+            tag_shm->num_tags++;
+          }
+        }
+      }
+
       draw_info_table(color_frame, tag_poses, job.fps_estimate);
+      
+      // Write annotated frame to shared memory for GUI (when using --frames-shm)
+      if (use_frames_shm && annotated_frame_shm != nullptr && 
+          color_frame.cols > 0 && color_frame.rows > 0 &&
+          color_frame.cols <= static_cast<int>(AnnotatedFrameIPCData::MAX_WIDTH) &&
+          color_frame.rows <= static_cast<int>(AnnotatedFrameIPCData::MAX_HEIGHT)) {
+        annotated_frame_shm->width = color_frame.cols;
+        annotated_frame_shm->height = color_frame.rows;
+        annotated_frame_shm->channels = 3;
+        annotated_frame_shm->frame_id = ++annotated_frame_id_counter;
+        annotated_frame_shm->timestamp = chrono::duration<double>(
+            chrono::steady_clock::now().time_since_epoch()).count();
+        
+        // Copy BGR frame data (ensure it's contiguous)
+        if (color_frame.isContinuous()) {
+          memcpy(annotated_frame_shm->data, color_frame.data, 
+                 color_frame.rows * color_frame.cols * 3);
+        } else {
+          // Copy row by row if not contiguous
+          for (int y = 0; y < color_frame.rows; y++) {
+            memcpy(annotated_frame_shm->data + y * color_frame.cols * 3,
+                   color_frame.ptr(y), color_frame.cols * 3);
+          }
+        }
+      }
+      
       auto draw_end = chrono::steady_clock::now();
       acc_draw_ms +=
           chrono::duration<double, milli>(draw_end - draw_start).count();
@@ -673,6 +1094,22 @@ int main(int argc, char **argv) {
   });
 
   auto process_frame = [&](const Mat &frame_ref) {
+    // Validate frame
+    if (frame_ref.empty() || frame_ref.data == nullptr) {
+      cerr << "Error: Invalid frame passed to process_frame" << endl;
+      return;
+    }
+    if (frame_ref.cols != width || frame_ref.rows != height) {
+      cerr << "Error: Frame size mismatch: " << frame_ref.cols << "x" << frame_ref.rows 
+           << " expected " << width << "x" << height << endl;
+      return;
+    }
+    if (!frame_ref.isContinuous()) {
+      cerr << "Error: Frame is not contiguous" << endl;
+      return;
+    }
+    
+    // Always use original frame for detection (mirroring will be applied to coordinates after detection)
     // Stage 1: GPU-only detection on this frame.
     auto f_start = chrono::steady_clock::now();
     detector.DetectGpuOnly(frame_ref.data);
@@ -712,8 +1149,39 @@ int main(int argc, char **argv) {
     job.disp_width = frame_ref.cols;
     job.disp_height = frame_ref.rows;
     job.fps_estimate = current_fps;
+    // FitQuads returns quads in full resolution (after AdjustPixelCenters)
+    // CopyGrayHostTo returns full resolution gray image
+    // So we use both in full resolution, then scale detection results afterward
     job.quads = detector.FitQuads();
+    
+    // Mirror gray image on GPU if requested (faster than CPU)
+    auto mirror_start = chrono::steady_clock::now();
+    if (horizontal_mirror) {
+      detector.MirrorGrayImageOnGpu();
+      // Also mirror quad coordinates (on CPU, they're small)
+      int gray_width = job.width;  // Full resolution width
+      for (auto& quad : job.quads) {
+        // Mirror x coordinates for all 4 corners
+        for (int i = 0; i < 4; i++) {
+          quad.corners[i][0] = gray_width - 1 - quad.corners[i][0];
+        }
+        // Swap corners to maintain correct orientation: 0<->1, 2<->3
+        float temp[2];
+        temp[0] = quad.corners[0][0]; temp[1] = quad.corners[0][1];
+        quad.corners[0][0] = quad.corners[1][0]; quad.corners[0][1] = quad.corners[1][1];
+        quad.corners[1][0] = temp[0]; quad.corners[1][1] = temp[1];
+        
+        temp[0] = quad.corners[2][0]; temp[1] = quad.corners[2][1];
+        quad.corners[2][0] = quad.corners[3][0]; quad.corners[2][1] = quad.corners[3][1];
+        quad.corners[3][0] = temp[0]; quad.corners[3][1] = temp[1];
+      }
+    }
+    auto mirror_end = chrono::steady_clock::now();
+    acc_mirror_ms += chrono::duration<double, milli>(mirror_end - mirror_start).count();
+    
+    // Copy full-resolution gray image from GPU
     detector.CopyGrayHostTo(job.gray);
+    
     // Copy the original input frame for display (independent of GPU layout).
     job.display_gray.resize(static_cast<size_t>(frame_ref.cols * frame_ref.rows));
     std::memcpy(job.display_gray.data(), frame_ref.data,
@@ -752,10 +1220,51 @@ after_gpu_stage:
 
     std::thread reader_thread([&]() {
       size_t idx = 1;
+      VideoCapture* cap_ptr = !video_path.empty() || (camera_index >= 0 && !use_mvsdk) ? &cap : nullptr;
       while (true) {
         auto read_start = chrono::steady_clock::now();
         Mat f;
-        bool ok = cap.read(f);
+        bool ok = false;
+        
+        if (use_frames_shm && frame_shm != nullptr) {
+          // Read from shared memory (GUI writes frames here)
+          // Wait for a new frame (check frame_id changed)
+          uint32_t current_frame_id = frame_shm->frame_id;
+          if (current_frame_id != last_frame_id && frame_shm->width > 0 && frame_shm->height > 0) {
+            // Create Mat from shared memory data
+            f = Mat(frame_shm->height, frame_shm->width, CV_8UC1, 
+                   (void*)frame_shm->data, frame_shm->width);
+            f = f.clone(); // Clone to own the data
+            last_frame_id = current_frame_id;
+            ok = !f.empty();
+          } else {
+            // No new frame yet, wait a bit
+            this_thread::sleep_for(chrono::milliseconds(5));
+            continue;
+          }
+        } else if (use_mvsdk && mv_camera_handle != 0) {
+          // Read from MindVision camera
+          BYTE *pbyBuffer = nullptr;
+          tSdkFrameHead sFrameInfo;
+          CameraSdkStatus status = CameraGetImageBuffer(mv_camera_handle, &sFrameInfo, &pbyBuffer, 100);
+          if (status == CAMERA_STATUS_SUCCESS) {
+            // Create Mat from frame data (MONO8 format)
+            f = Mat(sFrameInfo.iHeight, sFrameInfo.iWidth, CV_8UC1, pbyBuffer, sFrameInfo.iWidth);
+            f = f.clone(); // Clone to own the data
+            CameraReleaseImageBuffer(mv_camera_handle, pbyBuffer);
+            ok = !f.empty();
+          } else if (status == CAMERA_STATUS_TIME_OUT) {
+            continue; // Timeout is normal, try again
+          } else {
+            break; // Other error, exit
+          }
+        } else if (cap_ptr) {
+          // Read from OpenCV VideoCapture
+          ok = cap_ptr->read(f);
+        } else {
+          break;
+        }
+        
         auto read_end = chrono::steady_clock::now();
         double read_ms = chrono::duration<double, milli>(read_end - read_start).count();
         // Atomic add for double (nvcc + libstdc++ may lack fetch_add specialization)
@@ -766,7 +1275,16 @@ after_gpu_stage:
         }
 
         if (!ok || f.empty()) break;
-        CV_Assert(f.type() == CV_8UC1);
+        
+        // Ensure grayscale
+        if (f.type() != CV_8UC1) {
+          if (f.channels() == 2) {
+            cvtColor(f, f, COLOR_YUV2GRAY_YUY2);
+          } else if (f.channels() == 3) {
+            cvtColor(f, f, COLOR_BGR2GRAY);
+          }
+        }
+        
         if (f.cols != width || f.rows != height) {
           cerr << "Unexpected frame size in reader: " << f.cols << "x" << f.rows << endl;
           break;
@@ -813,15 +1331,115 @@ after_gpu_stage:
   } else {
     // No prefetching: synchronous read
     process_frame(frame);
+    VideoCapture* cap_ptr = !video_path.empty() || (camera_index >= 0 && !use_mvsdk) ? &cap : nullptr;
+    
     while (true) {
       auto read_start = chrono::steady_clock::now();
-      if (!cap.read(frame)) break;
+      bool ok = false;
+      
+      if (use_frames_shm && frame_shm != nullptr) {
+        // Read from shared memory (GUI writes frames here)
+        // Wait for a new frame (check frame_id changed)
+        uint32_t current_frame_id = frame_shm->frame_id;
+        if (current_frame_id != last_frame_id && frame_shm->width > 0 && frame_shm->height > 0) {
+          // Create Mat from shared memory data
+          frame = Mat(frame_shm->height, frame_shm->width, CV_8UC1, 
+                     (void*)frame_shm->data, frame_shm->width);
+          frame = frame.clone(); // Clone to own the data
+          last_frame_id = current_frame_id;
+          ok = !frame.empty();
+        } else {
+          // No new frame yet, wait a bit
+          this_thread::sleep_for(chrono::milliseconds(5));
+          continue;
+        }
+      } else if (use_mvsdk && mv_camera_handle != 0) {
+        // Read from MindVision camera
+        BYTE *pbyBuffer = nullptr;
+        tSdkFrameHead sFrameInfo;
+        CameraSdkStatus status = CameraGetImageBuffer(mv_camera_handle, &sFrameInfo, &pbyBuffer, 100);
+        if (status == CAMERA_STATUS_SUCCESS) {
+          // Create Mat from frame data (MONO8 format)
+          frame = Mat(sFrameInfo.iHeight, sFrameInfo.iWidth, CV_8UC1, pbyBuffer, sFrameInfo.iWidth);
+          frame = frame.clone(); // Clone to own the data
+          CameraReleaseImageBuffer(mv_camera_handle, pbyBuffer);
+          ok = !frame.empty();
+        } else if (status == CAMERA_STATUS_TIME_OUT) {
+          continue; // Timeout is normal, try again
+        } else {
+          break; // Other error, exit
+        }
+      } else if (cap_ptr) {
+        // Read from OpenCV VideoCapture
+        ok = cap_ptr->read(frame);
+        if (ok) {
+          // Ensure grayscale
+          if (frame.type() != CV_8UC1) {
+            if (frame.channels() == 2) {
+              cvtColor(frame, frame, COLOR_YUV2GRAY_YUY2);
+            } else if (frame.channels() == 3) {
+              cvtColor(frame, frame, COLOR_BGR2GRAY);
+            }
+          }
+        }
+      } else {
+        break;
+      }
+      
+      if (!ok) break;
+      
       auto read_end = chrono::steady_clock::now();
       acc_read_ms += chrono::duration<double, milli>(read_end - read_start).count();
-      CV_Assert(frame.type() == CV_8UC1);  // Grayscale
-      CV_Assert(frame.cols == width && frame.rows == height);
+      
+      if (frame.cols != width || frame.rows != height) {
+        cerr << "Unexpected frame size: " << frame.cols << "x" << frame.rows << endl;
+        break;
+      }
       process_frame(frame);
     }
+  }
+  
+  // Cleanup MindVision camera
+  if (mv_camera_handle != 0) {
+    CameraStop(mv_camera_handle);
+    CameraUnInit(mv_camera_handle);
+    mv_camera_handle = 0;
+  }
+  if (mv_rgb_buffer) {
+    free(mv_rgb_buffer);
+    mv_rgb_buffer = nullptr;
+  }
+  
+  // Cleanup shared memory for frames
+  if (frame_shm != nullptr && frame_shm != MAP_FAILED) {
+    munmap(frame_shm, sizeof(FrameIPCData));
+    frame_shm = nullptr;
+  }
+  if (frame_shm_fd >= 0) {
+    ::close(frame_shm_fd);
+    frame_shm_fd = -1;
+  }
+  
+  // Cleanup shared memory for tag detections
+  if (tag_shm != nullptr && tag_shm != MAP_FAILED) {
+    munmap(tag_shm, sizeof(TagDetectionData));
+    tag_shm = nullptr;
+  }
+  if (tag_shm_fd >= 0) {
+    ::close(tag_shm_fd);
+    tag_shm_fd = -1;
+    shm_unlink(TAG_IPC_KEY);
+  }
+  
+  // Cleanup shared memory for annotated frames
+  if (annotated_frame_shm != nullptr && annotated_frame_shm != MAP_FAILED) {
+    munmap(annotated_frame_shm, sizeof(AnnotatedFrameIPCData));
+    annotated_frame_shm = nullptr;
+  }
+  if (annotated_frame_shm_fd >= 0) {
+    ::close(annotated_frame_shm_fd);
+    annotated_frame_shm_fd = -1;
+    shm_unlink(ANNOTATED_FRAME_IPC_KEY);
   }
 
   // Finish decode and display/write threads and clean up
@@ -841,7 +1459,11 @@ after_gpu_stage:
   if (write_enabled) {
     writer.release();
   }
-  cap.release();
+  
+  // Cleanup VideoCapture if used
+  if (cap.isOpened()) {
+    cap.release();
+  }
 
   auto t_end = chrono::steady_clock::now();
   double total_s = chrono::duration<double>(t_end - t_start).count();
@@ -877,6 +1499,9 @@ after_gpu_stage:
     cout << "  Frame read:        " << (acc_read_ms / frames) << "\n";
     cout << "  Detect total:      " << (acc_detect_ms / frames) << "\n";
     cout << "    CUDA ops:        " << (acc_cuda_ms / frames) << "\n";
+    if (horizontal_mirror) {
+      cout << "    Mirror (GPU):     " << (acc_mirror_ms / frames) << "\n";
+    }
     cout << "    CPU decode:      " << (acc_cpu_decode_ms / frames) << "\n";
     cout << "  Scale coordinates: " << (acc_scale_ms / frames) << "\n";
     cout << "  Filter duplicates: " << (acc_filter_ms / frames) << "\n";

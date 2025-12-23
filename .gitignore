@@ -75,3 +75,5 @@ src/apriltags_cuda/build/json/
 src/apriltags_cuda/build/seasocks/
 src/apriltags_cuda/build/OpenCV/
 src/apriltags_cuda/build/*-install/
+input/NewVideo.avi
+input/*.avi

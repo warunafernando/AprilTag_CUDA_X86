@@ -306,6 +306,24 @@ target_include_directories(video_visualize_fixed PRIVATE ${CMAKE_SOURCE_DIR}/src
 set_source_files_properties(tools/video_visualize_fixed.cu PROPERTIES
     COMPILE_OPTIONS "-Xcudafe;--diag_suppress=611")
 
+add_executable(camera_gpu_detect tools/camera_gpu_detect.cu)
+target_link_libraries(camera_gpu_detect
+    apriltag_cuda
+    ${APRILTAG_LIBRARIES}
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_calib3d.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
+    MVSDK
+    glog::glog
+    Threads::Threads
+    rt)
+target_include_directories(camera_gpu_detect PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tools /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+set_source_files_properties(tools/camera_gpu_detect.cu PROPERTIES
+    COMPILE_OPTIONS "-Xcudafe;--diag_suppress=611")
+
 add_executable(video_visualize_cpu tools/video_visualize_cpu.cu src/apriltag_utils.cu)
 target_link_libraries(video_visualize_cpu
     ${APRILTAG_LIBRARIES}
@@ -387,14 +405,17 @@ target_link_libraries(camera_gui
     glog::glog)
 target_include_directories(camera_gui PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
 
-add_executable(camera_gui_qt tools/camera_gui_qt.cpp)
+add_executable(camera_gui_qt tools/camera_gui_qt.cpp src/apriltag_utils.cu)
 target_link_libraries(camera_gui_qt
     ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
     ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_calib3d.so
     MVSDK
     Qt5::Widgets
+    ${APRILTAG_LIBRARIES}
     glog::glog
     rt)  # For shared memory (shm_open, etc.)
 target_include_directories(camera_gui_qt PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
@@ -432,6 +453,160 @@ target_link_libraries(test_camera_read_threaded
     glog::glog
     Threads::Threads)
 target_include_directories(test_camera_read_threaded PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(simple_camera_detect tools/simple_camera_detect.cpp)
+
+add_executable(test_image_detect tools/test_image_detect.cpp)
+target_link_libraries(test_image_detect
+    ${APRILTAG_LIBRARIES}
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(test_image_detect PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(debug_undistorted_detection tools/debug_undistorted_detection.cpp)
+target_link_libraries(debug_undistorted_detection
+    ${APRILTAG_LIBRARIES}
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(debug_undistorted_detection PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(debug_tag_filtering tools/debug_tag_filtering.cpp)
+target_link_libraries(debug_tag_filtering
+    ${APRILTAG_LIBRARIES}
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(debug_tag_filtering PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(debug_detection_stages tools/debug_detection_stages.cpp)
+target_link_libraries(debug_detection_stages
+    ${APRILTAG_LIBRARIES}
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(debug_detection_stages PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(debug_edge_detection tools/debug_edge_detection.cpp)
+target_link_libraries(debug_edge_detection
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(debug_edge_detection PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(debug_contour_detection tools/debug_contour_detection.cpp)
+target_link_libraries(debug_contour_detection
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(debug_contour_detection PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(debug_corner_homography tools/debug_corner_homography.cpp)
+target_link_libraries(debug_corner_homography
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(debug_corner_homography PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(debug_pattern_extraction tools/debug_pattern_extraction.cpp)
+target_link_libraries(debug_pattern_extraction
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(debug_pattern_extraction PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(analyze_tag_decode tools/analyze_tag_decode.cpp)
+target_link_libraries(analyze_tag_decode
+    ${APRILTAG_LIBRARIES}
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(analyze_tag_decode PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(compare_quads_side_by_side tools/compare_quads_side_by_side.cpp)
+target_link_libraries(compare_quads_side_by_side
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(compare_quads_side_by_side PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(adjust_image_brightness tools/adjust_image_brightness.cpp)
+target_link_libraries(adjust_image_brightness
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(adjust_image_brightness PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(test_detection_on_adjusted tools/test_detection_on_adjusted.cpp)
+target_link_libraries(test_detection_on_adjusted
+    ${APRILTAG_LIBRARIES}
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(test_detection_on_adjusted PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
+
+add_executable(compare_homography tools/compare_homography.cpp)
+target_link_libraries(compare_homography
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(compare_homography PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(compare_pattern_extraction tools/compare_pattern_extraction.cpp)
+target_link_libraries(compare_pattern_extraction
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(compare_pattern_extraction PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(hamming_decode tools/hamming_decode.cpp)
+target_link_libraries(hamming_decode
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(hamming_decode PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(visualize_hamming_decode tools/visualize_hamming_decode.cpp)
+target_link_libraries(visualize_hamming_decode
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(visualize_hamming_decode PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(visualize_hamming_mirror tools/visualize_hamming_mirror.cpp)
+target_link_libraries(visualize_hamming_mirror
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so)
+target_include_directories(visualize_hamming_mirror PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(simple_camera_detect
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_core.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgproc.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_highgui.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_videoio.so
+    ${OPENCV_INSTALL_DIR}/lib/libopencv_imgcodecs.so
+    MVSDK
+    ${APRILTAG_LIBRARIES}
+    Threads::Threads)
+target_include_directories(simple_camera_detect PRIVATE ${CMAKE_SOURCE_DIR}/src /usr/local/include /usr/local/include/apriltag /usr/local/include/apriltag/common)
 
 # Add a custom target to format all source files
 add_custom_target(format_all

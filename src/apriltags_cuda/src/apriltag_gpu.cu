@@ -44,6 +44,23 @@ __global__ void SampleQuadsKernel(const uint8_t *gray_image,
   (void)out_samples;
 }
 
+// CUDA kernel to horizontally mirror an image
+__global__ void MirrorImageHorizontalKernel(uint8_t *image, int width, int height) {
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  
+  if (x < width / 2 && y < height) {
+    int mirror_x = width - 1 - x;
+    int idx1 = y * width + x;
+    int idx2 = y * width + mirror_x;
+    
+    // Swap pixels
+    uint8_t temp = image[idx1];
+    image[idx1] = image[idx2];
+    image[idx2] = temp;
+  }
+}
+
 // Returns true if the QuadBoundaryPoint is nonzero.
 struct NonZero {
   __host__ __device__ __forceinline__ bool operator()(
@@ -225,12 +242,29 @@ GpuDetector::~GpuDetector() {
   zarray_destroy(poly0_);
 }
 
-void GpuDetector::CopyGrayHostTo(std::vector<uint8_t> &out) const {
+void GpuDetector::CopyGrayHostTo(std::vector<uint8_t> &out) {
+  // Synchronize CUDA stream to ensure any async operations (like MirrorGrayImageOnGpu)
+  // have completed before copying from the host buffer
+  cudaStreamSynchronize(stream_.get());
+  
   const size_t sz = width_ * height_;
   out.resize(sz);
   if (sz > 0) {
     std::memcpy(out.data(), gray_image_host_.get(), sz);
   }
+}
+
+void GpuDetector::MirrorGrayImageOnGpu() {
+  // Mirror the gray image horizontally on GPU before copying to host
+  dim3 blockSize(16, 16);
+  dim3 gridSize((width_ / 2 + blockSize.x - 1) / blockSize.x,
+                (height_ + blockSize.y - 1) / blockSize.y);
+  
+  MirrorImageHorizontalKernel<<<gridSize, blockSize, 0, stream_.get()>>>(
+      gray_image_device_.get(), static_cast<int>(width_), static_cast<int>(height_));
+  
+  // Update the host copy (async, so it's ready when CopyGrayHostTo is called)
+  gray_image_device_.MemcpyAsyncTo(&gray_image_host_, &stream_);
 }
 
 void GpuDetector::ReinitializeDetections() {

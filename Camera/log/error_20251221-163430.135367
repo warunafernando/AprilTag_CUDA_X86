@@ -1,0 +1,4 @@
+Log file created at: 2025/12/21 16:34:30
+Running on machine: navlaptop
+Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+E1221 16:34:30.032677 135367 MVCAMAPI.cpp:369] CameraInit Failed, err:-18,Version:2.1.0.49,FriendlyName:HT-SUA134GM-T1V-C,SN:045022723052
