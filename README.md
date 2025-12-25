@@ -480,18 +480,34 @@ When tags are detected, the GUI automatically displays a comprehensive pattern v
 
 **Example Pattern Visualizations**:
 
-![Tag 3 Pattern Visualization](docs/images/pattern_visualizations/tag_3_20251225_000758.png)
-*Pattern visualization for Tag ID 3 showing warped image, gray color values, and digitized pattern*
+Each saved visualization includes all three boxes side-by-side with the same dimensions as displayed:
 
-![Tag 20 Pattern Visualization](docs/images/pattern_visualizations/tag_20_20251225_000758.png)
-*Pattern visualization for Tag ID 20 showing warped image, gray color values, and digitized pattern*
+![Tag 3 Pattern Visualization](docs/images/pattern_visualizations/tag_3_20251225_121240.png)
+*Pattern visualization for Tag ID 3 showing: (1) Warped image with border/extraction lines, (2) Gray color box with actual pixel values, (3) Digitized black/white pattern*
 
-The gray color box displays the actual pixel values extracted from the tag, making it easy to see:
-- Border cells (black, outer ring)
-- Data region cells with their exact grayscale values (0-255)
-- Visual representation of the analog color values
+![Tag 20 Pattern Visualization](docs/images/pattern_visualizations/tag_20_20251225_121240.png)
+*Pattern visualization for Tag ID 20 showing: (1) Warped image with border/extraction lines, (2) Gray color box with actual pixel values, (3) Digitized black/white pattern*
 
-The digitized pattern shows the binary interpretation (black/white) without text labels for a clean visualization.
+**Visualization Components**:
+
+1. **Warped Image** (left): 
+   - Original warped tag image resized to match display dimensions
+   - Green lines show actual border boundaries
+   - Red lines show effective extraction boundaries
+   - Same size as other boxes for consistent layout
+
+2. **Gray Color Box** (middle):
+   - 8x8 grid showing actual grayscale pixel values (0-255) as visual colors
+   - Border cells are black (outer ring)
+   - Data region (6x6 center) shows exact grayscale values
+   - Visual representation of the analog color values before digitization
+
+3. **Digitized Pattern** (right):
+   - 8x8 grid with black border and 6x6 data region
+   - Binary interpretation (black/white) without text labels
+   - Clean visualization of the final digitized pattern
+
+All three boxes are saved with the same dimensions as displayed in the GUI, ensuring consistency between on-screen visualization and saved files.
 
 #### 3. Algorithms Tab
 - **Real-time detection**: Live camera feed with GPU-accelerated AprilTag detection

@@ -181,3 +181,4 @@ Potential improvements for future versions:
 - Customizable visualization layouts
 - Pattern comparison tools
 
+
