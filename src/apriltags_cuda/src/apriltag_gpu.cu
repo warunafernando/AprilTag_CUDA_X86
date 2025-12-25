@@ -818,7 +818,11 @@ void GpuDetector::Detect(const uint8_t *image) {
   // const aos::monotonic_clock::time_point start_time =
   //     aos::monotonic_clock::now();
   start_.Record(&stream_);
-  color_image_device_.MemcpyAsyncFrom(image, &stream_);
+  // Fix: Use actual image size (grayscale: width*height) instead of buffer size (width*height*2)
+  // The buffer is allocated for YUYV (2 bytes/pixel) but we're passing grayscale (1 byte/pixel)
+  size_t image_size = width_ * height_;
+  CHECK_CUDA(cudaMemcpyAsync(color_image_device_.get(), image, image_size,
+                              cudaMemcpyHostToDevice, stream_.get()));
   after_image_memcpy_to_device_.Record(&stream_);
 
   // Threshold the image.
@@ -1282,7 +1286,11 @@ void GpuDetector::DetectGpuOnly(const uint8_t *image) {
   // but does not perform CPU tag decoding or timing accumulation.
 
   start_.Record(&stream_);
-  color_image_device_.MemcpyAsyncFrom(image, &stream_);
+  // Fix: Use actual image size (grayscale: width*height) instead of buffer size (width*height*2)
+  // The buffer is allocated for YUYV (2 bytes/pixel) but we're passing grayscale (1 byte/pixel)
+  size_t image_size = width_ * height_;
+  CHECK_CUDA(cudaMemcpyAsync(color_image_device_.get(), image, image_size,
+                              cudaMemcpyHostToDevice, stream_.get()));
   after_image_memcpy_to_device_.Record(&stream_);
 
   // Threshold the image.

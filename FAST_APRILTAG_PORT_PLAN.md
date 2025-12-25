@@ -187,3 +187,8 @@ Port the exact detection algorithm from `video_visualize_fixed.cu` to the GUI's 
 4. No crashes or memory leaks
 5. Performance is acceptable (similar to standalone program)
 
+
+
+
+
+
